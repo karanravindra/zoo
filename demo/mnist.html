@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MNIST CNN</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      font-family: Georgia, serif;
+      margin: 0;
+      padding: 48px 24px;
+      background: #fff;
+      color: #000;
+    }
+
+    h1 {
+      font-size: 18px;
+      font-weight: normal;
+      margin: 0 0 4px;
+    }
+
+    p.sub {
+      font-size: 13px;
+      color: #666;
+      margin: 0 0 24px;
+    }
+
+    .workspace {
+      display: flex;
+      align-items: flex-start;
+      gap: 24px;
+    }
+
+    .left {
+      flex-shrink: 0;
+    }
+
+    /* Canvas is 32×32 internally, displayed at 10× = 320px */
+    canvas {
+      display: block;
+      border: 1px solid #000;
+      cursor: crosshair;
+      background: #fff;
+      width: 320px;
+      height: 320px;
+      image-rendering: pixelated;
+    }
+
+    .controls {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    button {
+      border: 1px solid #000;
+      background: #fff;
+      color: #000;
+      padding: 4px 12px;
+      cursor: pointer;
+      font-family: Georgia, serif;
+      font-size: 13px;
+      border-radius: 0;
+    }
+
+    button:hover {
+      background: #000;
+      color: #fff;
+    }
+
+    #status {
+      font-size: 12px;
+      color: #999;
+      min-height: 16px;
+    }
+
+    /* Chart — always visible, right of canvas */
+    #chart {
+      flex: 1;
+      min-width: 160px;
+      padding-top: 2px;
+    }
+
+    .bar-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 13px;
+    }
+
+    .bar-label {
+      width: 12px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      flex-shrink: 0;
+    }
+
+    .bar-track {
+      flex: 1;
+      height: 14px;
+      background: #f0f0f0;
+    }
+
+    .bar-fill {
+      height: 100%;
+      background: #ccc;
+      width: 0%;
+      transition: width 0.1s ease, background 0.1s ease, opacity 0.1s ease;
+    }
+
+    .bar-pct {
+      width: 38px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: #999;
+      flex-shrink: 0;
+      font-size: 12px;
+    }
+
+    .bar-row.top1 .bar-fill   { background: #000; opacity: 1; }
+    .bar-row.top2 .bar-fill   { background: #000; opacity: 0.4; }
+    .bar-row.top3 .bar-fill   { background: #000; opacity: 0.2; }
+    .bar-row.rest .bar-fill   { background: #ccc; opacity: 0.5; }
+
+    .bar-row.top1 .bar-label  { font-weight: bold; }
+    .bar-row.top1 .bar-pct    { color: #000; font-weight: bold; }
+    .bar-row.top2 .bar-pct,
+    .bar-row.top3 .bar-pct    { color: #555; }
+
+    .error { color: #c00; }
+  </style>
+</head>
+<body>
+  <div x-data="mnistApp()" x-init="init()">
+    <h1>MNIST digit recognizer</h1>
+    <p class="sub">Draw a digit. Predictions update live.</p>
+
+    <div class="workspace">
+      <div class="left">
+        <canvas
+          x-ref="canvas"
+          width="32"
+          height="32"
+          @mousedown="beginDraw($event)"
+          @mousemove="draw($event)"
+          @mouseup="endDraw()"
+          @mouseleave="endDraw()"
+          @touchstart.prevent="beginDraw($event)"
+          @touchmove.prevent="draw($event)"
+          @touchend.prevent="endDraw()"
+        ></canvas>
+        <div class="controls">
+          <button type="button" @click="clearCanvas()">Clear</button>
+          <span id="status" x-html="status"></span>
+        </div>
+      </div>
+      <div id="chart">
+        <template x-for="bar in bars" :key="bar.digit">
+          <div class="bar-row" :class="bar.rankClass">
+            <div class="bar-label" x-text="bar.digit"></div>
+            <div class="bar-track">
+              <div class="bar-fill" :style="`width: ${bar.width}`"></div>
+            </div>
+            <div class="bar-pct" x-text="bar.pctText"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+  <script>
+    const HF_REPO_ID = "karanravindra/mnist-cnn-onnx";
+    const HF_MODEL_FILE = "mnist_cnn.onnx";
+    const MODEL_PATH = `https://huggingface.co/${HF_REPO_ID}/resolve/main/${HF_MODEL_FILE}?download=1`;
+
+    function mnistApp() {
+      return {
+        ctx: null,
+        status: "",
+        isDrawing: false,
+        lastX: 0,
+        lastY: 0,
+        idleTimer: null,
+        sessionPromise: null,
+        inferring: false,
+        pendingInfer: false,
+        bars: Array.from({ length: 10 }, (_, digit) => ({
+          digit,
+          width: "0%",
+          pctText: "—",
+          rankClass: "rest",
+        })),
+
+        init() {
+          this.ctx = this.$refs.canvas.getContext("2d");
+          this.fillWhite();
+          this.getSession().catch(() => {});
+        },
+
+        fillWhite() {
+          this.ctx.fillStyle = "#fff";
+          this.ctx.fillRect(0, 0, 32, 32);
+        },
+
+        getPos(e) {
+          const rect = this.$refs.canvas.getBoundingClientRect();
+          const src = e.touches?.length
+            ? e.touches[0]
+            : e.changedTouches?.length
+              ? e.changedTouches[0]
+              : e;
+          return {
+            x: (src.clientX - rect.left) * (32 / rect.width),
+            y: (src.clientY - rect.top) * (32 / rect.height),
+          };
+        },
+
+        beginDraw(e) {
+          this.isDrawing = true;
+          const { x, y } = this.getPos(e);
+          this.lastX = x;
+          this.lastY = y;
+          this.resetIdleTimer();
+        },
+
+        draw(e) {
+          if (!this.isDrawing) return;
+          const { x, y } = this.getPos(e);
+          this.ctx.strokeStyle = "#000";
+          this.ctx.lineWidth = 2;
+          this.ctx.lineCap = "round";
+          this.ctx.lineJoin = "round";
+          this.ctx.beginPath();
+          this.ctx.moveTo(this.lastX, this.lastY);
+          this.ctx.lineTo(x, y);
+          this.ctx.stroke();
+          this.lastX = x;
+          this.lastY = y;
+          this.resetIdleTimer();
+        },
+
+        endDraw() {
+          this.isDrawing = false;
+        },
+
+        resetIdleTimer() {
+          clearTimeout(this.idleTimer);
+          this.idleTimer = setTimeout(() => this.triggerInfer(), 100);
+        },
+
+        clearCanvas() {
+          this.fillWhite();
+          clearTimeout(this.idleTimer);
+          this.status = "";
+          this.bars = this.bars.map((bar) => ({
+            ...bar,
+            width: "0%",
+            pctText: "—",
+            rankClass: "rest",
+          }));
+        },
+
+        async getSession() {
+          if (!this.sessionPromise) {
+            ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
+            this.sessionPromise = ort.InferenceSession.create(MODEL_PATH, {
+              executionProviders: ["wasm"],
+            });
+            
+            this.status = "loading model…";
+            this.sessionPromise.then(() => {
+              if (this.status === "loading model…") this.status = "";
+            }).catch(() => {});
+          }
+          return this.sessionPromise;
+        },
+
+        getInputTensor() {
+          const imageData = this.ctx.getImageData(0, 0, 32, 32);
+          const data = imageData.data;
+          const input = new Float32Array(32 * 32);
+          for (let i = 0; i < 32 * 32; i++) {
+            const gray = (255 - data[i * 4]) / 255.0;
+            input[i] = (gray - 0.1307) / 0.3081;
+          }
+          return new ort.Tensor("float32", input, [1, 1, 32, 32]);
+        },
+
+        softmaxByDigit(logits) {
+          let maxLogit = -Infinity;
+          for (let i = 0; i < logits.length; i++) {
+            if (logits[i] > maxLogit) maxLogit = logits[i];
+          }
+          let sumExp = 0;
+          const exps = new Float32Array(logits.length);
+          for (let i = 0; i < logits.length; i++) {
+            exps[i] = Math.exp(logits[i] - maxLogit);
+            sumExp += exps[i];
+          }
+          return Array.from(exps, (v) => v / sumExp);
+        },
+
+        updateChart(probs) {
+          const sorted = probs.map((p, i) => ({ p, i })).sort((a, b) => b.p - a.p);
+          const rank = new Array(10);
+          sorted.forEach(({ i }, r) => { rank[i] = r; });
+
+          this.bars = this.bars.map((bar, d) => {
+            const pctVal = probs[d] * 100;
+            const r = rank[d];
+            return {
+              ...bar,
+              width: `${pctVal.toFixed(1)}%`,
+              pctText: `${pctVal.toFixed(1)}%`,
+              rankClass: r === 0 ? "top1" : r === 1 ? "top2" : r === 2 ? "top3" : "rest",
+            };
+          });
+
+          this.status = `${sorted[0].i} · ${(sorted[0].p * 100).toFixed(1)}%`;
+        },
+
+        async triggerInfer() {
+          if (this.inferring) {
+            this.pendingInfer = true;
+            return;
+          }
+          this.inferring = true;
+          try {
+            const session = await this.getSession();
+            if (this.status === "loading model…") this.status = "";
+            const results = await session.run({ input: this.getInputTensor() });
+            this.updateChart(this.softmaxByDigit(results.logits.data));
+          } catch (err) {
+            this.status = `<span class="error">Error: ${err.message}</span>`;
+            console.error(err);
+          } finally {
+            this.inferring = false;
+            if (this.pendingInfer) {
+              this.pendingInfer = false;
+              this.triggerInfer();
+            }
+          }
+        },
+      };
+    }
+  </script>
+</body>
+</html>
