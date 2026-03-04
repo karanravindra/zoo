@@ -9,10 +9,10 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "accelerate>=1.12.0",
-    "flashinfer-python>=0.6.4",
+    "flashinfer-python>=0.6.4; sys_platform != 'darwin'",
     "ipykernel>=7.2.0",
     "ipywidgets>=8.1.8",
-    "liger-kernel>=0.7.0",
+    "liger-kernel>=0.7.0; sys_platform != 'darwin'",
     "lightning>=2.6.1",
     "llama-cpp-python>=0.3.16",
     "matplotlib>=3.10.8",
@@ -30,9 +30,16 @@ dependencies = [
     "tqdm>=4.67.3",
     "transformers>=4.57.6",
     "trl>=0.24.0",
-    "unsloth>=2026.2.1",
-    "vllm==0.10.2",
+    "unsloth>=2026.2.1; sys_platform != 'darwin'",
+    "vllm==0.10.2; sys_platform != 'darwin'",
     "wandb>=0.25.0",
+]
+
+[tool.uv]
+environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
 ]
 
 [project.scripts]
