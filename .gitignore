@@ -12,3 +12,4 @@ wheels/
 *.safetensors
 /data
 wandb/
+unsloth_compiled_cache/
