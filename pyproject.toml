@@ -1,0 +1,23 @@
+[project]
+name = "zoo"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Karan Ravindra", email = "21176108+karanravindra@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "lightning>=2.6.6",
+    "matplotlib>=3.11.2",
+    "torch>=2.14.1",
+    "torchvision>=0.29.1",
+    "tqdm>=4.70.1",
+]
+
+[project.scripts]
+zoo = "zoo:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
