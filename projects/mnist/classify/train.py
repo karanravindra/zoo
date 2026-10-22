@@ -10,8 +10,9 @@ import matplotlib.pyplot as plt
 import torch
 from model import ConvNeXt
 from torch import nn
-from torch.utils.data import DataLoader, random_split
-from torchvision import datasets, transforms
+
+from zoo.data import make_loader
+from zoo.data.mnist import add_data_arguments, config_from_args, make_splits
 
 
 @torch.inference_mode()
@@ -90,39 +91,26 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--data-dir", type=Path, default=Path("data"))
+    add_data_arguments(parser)
     parser.add_argument("--output-dir", type=Path,
                         default=Path(__file__).parent / "outputs")
     args = parser.parse_args()
     if args.steps < 1 or args.log_every < 1 or args.batch_size < 1 or args.lr <= 0:
         parser.error("steps, log-every, batch-size, and lr must be positive")
+    try:
+        data_config = config_from_args(args)
+    except ValueError as error:
+        parser.error(str(error))
 
     torch.manual_seed(args.seed)
     torch.set_num_threads(4)
     device = torch.device(args.device)
     output = args.output_dir
     output.mkdir(parents=True, exist_ok=True)
-    transform = transforms.Compose([
-        transforms.Resize((32, 32), interpolation=transforms.InterpolationMode.BILINEAR),
-        transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,)),
-    ])
-    dataset = datasets.MNIST(args.data_dir, train=True, download=True, transform=transform)
-    train_data, val_data = random_split(
-        dataset, [len(dataset) - 512, 512],
-        generator=torch.Generator().manual_seed(args.seed),
-    )
-    train_transform = transforms.Compose([
-        transforms.Resize((32, 32), interpolation=transforms.InterpolationMode.BILINEAR),
-        transforms.RandomAffine(
-            degrees=30, shear=10, interpolation=transforms.InterpolationMode.BILINEAR,
-        ),
-        transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,)),
-    ])
-    train_data.dataset = datasets.MNIST(args.data_dir, train=True, transform=train_transform)
-    test_data = datasets.MNIST(args.data_dir, train=False, download=True, transform=transform)
-    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_data, batch_size=256)
-    test_loader = DataLoader(test_data, batch_size=256)
+    train_data, val_data, test_data = make_splits(data_config, args.seed)
+    train_loader = make_loader(train_data, data_config, args.batch_size, shuffle=True, seed=args.seed)
+    val_loader = make_loader(val_data, data_config, 256)
+    test_loader = make_loader(test_data, data_config, 256)
     model = ConvNeXt().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.steps)
@@ -164,6 +152,7 @@ def main():
     plot_results(history, targets, predictions, test_data, output)
     summary = dict(steps=args.steps, seed=args.seed, batch_size=args.batch_size,
                    lr=args.lr, weight_decay=0.01, device=str(device),
+                   data_backend=args.backend, num_workers=args.num_workers,
                    parameters=sum(p.numel() for p in model.parameters()),
                    validation_samples=len(val_data), test_samples=len(test_data),
                    test_loss=test_loss, test_accuracy=test_accuracy)

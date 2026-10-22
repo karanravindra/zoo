@@ -28,9 +28,9 @@ def main():
             ax.axis("off")
             if row == 0:
                 ax.set_title("Original" if col == 0 else f"Augment {col}")
-    fig.suptitle("32×32 MNIST · random rotation ±15° + shear ±10° · bilinear")
+    fig.suptitle("32×32 MNIST · random rotation ±30° + shear ±10° · bilinear")
     fig.tight_layout()
-    output = Path(__file__).parent / "outputs" / "augmentations.png"
+    output = Path(__file__).resolve().parents[1] / "outputs" / "augmentations.png"
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=150)
     plt.close(fig)
