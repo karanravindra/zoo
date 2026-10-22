@@ -12,10 +12,13 @@ def main():
     torch.manual_seed(42)
     dataset = datasets.MNIST("data", train=True, download=True)
     resize = transforms.Resize(
-        (32, 32), interpolation=transforms.InterpolationMode.BILINEAR,
+        (32, 32),
+        interpolation=transforms.InterpolationMode.BILINEAR,
     )
     augment = transforms.RandomAffine(
-        degrees=30, shear=10, interpolation=transforms.InterpolationMode.BILINEAR,
+        degrees=30,
+        shear=10,
+        interpolation=transforms.InterpolationMode.BILINEAR,
     )
     fig, axes = plt.subplots(5, 6, figsize=(10, 9))
     for row, digit in enumerate((0, 1, 2, 5, 8)):
@@ -23,8 +26,13 @@ def main():
         image = resize(dataset[index][0])
         for col in range(6):
             ax = axes[row, col]
-            ax.imshow(image if col == 0 else augment(image), cmap="gray",
-                      vmin=0, vmax=255, interpolation="nearest")
+            ax.imshow(
+                image if col == 0 else augment(image),
+                cmap="gray",
+                vmin=0,
+                vmax=255,
+                interpolation="nearest",
+            )
             ax.axis("off")
             if row == 0:
                 ax.set_title("Original" if col == 0 else f"Augment {col}")

@@ -13,7 +13,9 @@ class LoaderConfig:
 
     def __post_init__(self):
         if self.num_workers < 0 or self.prefetch_factor < 1:
-            raise ValueError("num-workers must be nonnegative and prefetch-factor positive")
+            raise ValueError(
+                "num-workers must be nonnegative and prefetch-factor positive"
+            )
         if self.persistent_workers and not self.num_workers:
             raise ValueError("persistent-workers requires num-workers > 0")
 
@@ -28,8 +30,16 @@ def add_loader_arguments(parser):
 def make_loader(dataset, config, batch_size, shuffle=False, seed=42):
     kwargs = {}
     if config.num_workers:
-        kwargs.update(prefetch_factor=config.prefetch_factor,
-                      persistent_workers=config.persistent_workers)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
-                      num_workers=config.num_workers, pin_memory=config.pin_memory,
-                      generator=torch.Generator().manual_seed(seed), **kwargs)
+        kwargs.update(
+            prefetch_factor=config.prefetch_factor,
+            persistent_workers=config.persistent_workers,
+        )
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory,
+        generator=torch.Generator().manual_seed(seed),
+        **kwargs,
+    )

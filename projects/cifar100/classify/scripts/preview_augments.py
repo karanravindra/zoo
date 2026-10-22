@@ -17,7 +17,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / "outputs/augmentations.png")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "outputs/augmentations.png",
+    )
     args = parser.parse_args()
     torch.manual_seed(args.seed)
     dataset = datasets.CIFAR100(args.data_dir, train=True, download=True)
@@ -26,8 +30,12 @@ def main():
         index = dataset.targets.index(row)
         image, label = dataset[index]
         for col in range(6):
-            axes[row, col].imshow(image if col == 0 else AUGMENT(image), interpolation="nearest")
-            axes[row, col].set_title(dataset.classes[label] if col == 0 else f"Augment {col}", fontsize=9)
+            axes[row, col].imshow(
+                image if col == 0 else AUGMENT(image), interpolation="nearest"
+            )
+            axes[row, col].set_title(
+                dataset.classes[label] if col == 0 else f"Augment {col}", fontsize=9
+            )
             axes[row, col].axis("off")
     fig.suptitle("CIFAR-100 · random crop (padding 4) + horizontal flip")
     fig.tight_layout()

@@ -16,7 +16,7 @@ def measure(loader, batches=0):
     for _ in range(batches or len(loader)):
         batch_start = time.perf_counter()
         try:
-            images, labels = next(iterator)
+            _images, labels = next(iterator)
         except StopIteration:
             break
         latencies.append(time.perf_counter() - batch_start)
@@ -25,11 +25,15 @@ def measure(loader, batches=0):
         samples += len(labels)
     elapsed = time.perf_counter() - start
     ordered = sorted(latencies)
-    return dict(samples=samples, batches=len(latencies), seconds=elapsed,
-                samples_per_second=samples / elapsed,
-                first_batch_seconds=first_batch_seconds,
-                batch_p50_ms=1000 * statistics.median(latencies),
-                batch_p95_ms=1000 * ordered[min(len(ordered) - 1, int(0.95 * len(ordered)))])
+    return {
+        "samples": samples,
+        "batches": len(latencies),
+        "seconds": elapsed,
+        "samples_per_second": samples / elapsed,
+        "first_batch_seconds": first_batch_seconds,
+        "batch_p50_ms": 1000 * statistics.median(latencies),
+        "batch_p95_ms": 1000 * ordered[min(len(ordered) - 1, int(0.95 * len(ordered)))],
+    }
 
 
 def benchmark_loader(loader, batches=0, repeats=3):
@@ -43,6 +47,10 @@ def benchmark_loader(loader, batches=0, repeats=3):
         raise ValueError("repeats must be positive")
     first = measure(loader, batches)
     passes = [measure(loader, batches) for _ in range(repeats)]
-    return dict(first_pass=first, passes=passes,
-                median_samples_per_second=statistics.median(
-                    row["samples_per_second"] for row in passes))
+    return {
+        "first_pass": first,
+        "passes": passes,
+        "median_samples_per_second": statistics.median(
+            row["samples_per_second"] for row in passes
+        ),
+    }

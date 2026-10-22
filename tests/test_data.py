@@ -14,8 +14,13 @@ from zoo.data.mnist import DataConfig, make_dataset
 
 class FakeMNIST:
     def __init__(self):
-        self.data = torch.randint(0, 256, (23, 28, 28), dtype=torch.uint8,
-                                  generator=torch.Generator().manual_seed(12))
+        self.data = torch.randint(
+            0,
+            256,
+            (23, 28, 28),
+            dtype=torch.uint8,
+            generator=torch.Generator().manual_seed(12),
+        )
         self.targets = torch.arange(23) % 10
 
     def __len__(self):
@@ -47,7 +52,9 @@ class DataTests(unittest.TestCase):
         restored = pickle.loads(pickle.dumps(stored))
         self.assertFalse(restored._chunks)
         self.assertTrue(torch.equal(restored[6][0], images[6]))
-        with patch.object(TensorDataset, "__getitem__", side_effect=AssertionError("rebuilt")):
+        with patch.object(
+            TensorDataset, "__getitem__", side_effect=AssertionError("rebuilt")
+        ):
             reused = TensorChunks.prepare(self.root, source, {"version": 1}, 5)
         self.assertEqual(reused.path, stored.path)
         changed = TensorChunks.prepare(self.root, source, {"version": 2}, 5)
@@ -55,9 +62,11 @@ class DataTests(unittest.TestCase):
 
     def test_failed_build_is_not_published(self):
         source = TensorDataset(torch.zeros(8, 1, 4, 4), torch.arange(8))
-        with patch("zoo.data.cache.torch.save", side_effect=RuntimeError("interrupted")):
-            with self.assertRaises(RuntimeError):
-                TensorChunks.prepare(self.root, source, {}, 3)
+        with (
+            patch("zoo.data.cache.torch.save", side_effect=RuntimeError("interrupted")),
+            self.assertRaises(RuntimeError),
+        ):
+            TensorChunks.prepare(self.root, source, {}, 3)
         self.assertEqual(list(self.root.iterdir()), [])
 
     def test_missing_chunk_rejected(self):
@@ -71,8 +80,12 @@ class DataTests(unittest.TestCase):
         with patch("zoo.data.mnist.datasets.MNIST", return_value=FakeMNIST()):
             for split in ("train", "val", "test"):
                 reference = make_dataset(DataConfig(), split)
-                cached = make_dataset(DataConfig(backend="tensor-cache", cache_dir=self.root,
-                                                 chunk_size=5), split)
+                cached = make_dataset(
+                    DataConfig(
+                        backend="tensor-cache", cache_dir=self.root, chunk_size=5
+                    ),
+                    split,
+                )
                 for index in range(len(reference)):
                     torch.manual_seed(index)
                     image, label = reference[index]
@@ -87,12 +100,20 @@ class DataTests(unittest.TestCase):
                     self.assertFalse(torch.equal(first, cached[0][0]))
 
     def test_multiworker_loader(self):
-        source = TensorDataset(torch.arange(23).reshape(23, 1, 1, 1).float(), torch.arange(23))
+        source = TensorDataset(
+            torch.arange(23).reshape(23, 1, 1, 1).float(), torch.arange(23)
+        )
         stored = TensorChunks.prepare(self.root, source, {}, 5)
         loader = make_loader(stored, DataConfig(num_workers=2), batch_size=4)
         batches = list(loader)
-        self.assertTrue(torch.equal(torch.cat([labels for _, labels in batches]), torch.arange(23)))
-        self.assertTrue(torch.equal(torch.cat([images.flatten() for images, _ in batches]), torch.arange(23)))
+        self.assertTrue(
+            torch.equal(torch.cat([labels for _, labels in batches]), torch.arange(23))
+        )
+        self.assertTrue(
+            torch.equal(
+                torch.cat([images.flatten() for images, _ in batches]), torch.arange(23)
+            )
+        )
 
 
 if __name__ == "__main__":

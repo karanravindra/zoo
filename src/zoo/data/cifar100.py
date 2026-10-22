@@ -18,9 +18,12 @@ from .transforms import TransformDataset
 MEAN = (0.5071, 0.4867, 0.4408)
 STD = (0.2675, 0.2565, 0.2761)
 NORMALIZE = transforms.Normalize(MEAN, STD)
-AUGMENT = transforms.Compose([
-    transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip(),
-])
+AUGMENT = transforms.Compose(
+    [
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+    ]
+)
 EVALUATE = transforms.Compose([transforms.ToTensor(), NORMALIZE])
 TRAIN = transforms.Compose([AUGMENT, transforms.ToTensor(), NORMALIZE])
 
@@ -48,17 +51,27 @@ def pil_backend(source, training, config):
 def tensor_cache_backend(source, training, config):
     digest = hashlib.sha256(source.data.tobytes())
     digest.update(torch.tensor(source.targets, dtype=torch.int64).numpy().tobytes())
-    metadata = {"dataset": "CIFAR100", "source_sha256": digest.hexdigest(),
-                "classes": source.classes, "mean": list(MEAN), "std": list(STD),
-                "preprocessing": "rgb-uint8-v1" if training else "normalized-f32-v1",
-                "torchvision": torchvision.__version__, "pillow": pillow_version}
+    metadata = {
+        "dataset": "CIFAR100",
+        "source_sha256": digest.hexdigest(),
+        "classes": source.classes,
+        "mean": list(MEAN),
+        "std": list(STD),
+        "preprocessing": "rgb-uint8-v1" if training else "normalized-f32-v1",
+        "torchvision": torchvision.__version__,
+        "pillow": pillow_version,
+    }
     stored = TensorChunks.prepare(
         config.cache_dir,
         TransformDataset(source, transforms.PILToTensor() if training else EVALUATE),
-        metadata, chunk_size=config.chunk_size, max_open_chunks=config.max_open_chunks,
+        metadata,
+        chunk_size=config.chunk_size,
+        max_open_chunks=config.max_open_chunks,
     )
     if training:
-        return TransformDataset(stored, transforms.Compose([transforms.ToPILImage(), TRAIN]))
+        return TransformDataset(
+            stored, transforms.Compose([transforms.ToPILImage(), TRAIN])
+        )
     return stored
 
 
@@ -67,7 +80,9 @@ BACKENDS = {"pil": pil_backend, "tensor-cache": tensor_cache_backend}
 
 def add_data_arguments(parser):
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
-    parser.add_argument("--cache-dir", type=Path, default=Path("data/cifar100-tensor-cache"))
+    parser.add_argument(
+        "--cache-dir", type=Path, default=Path("data/cifar100-tensor-cache")
+    )
     parser.add_argument("--backend", choices=BACKENDS, default="pil")
     parser.add_argument("--chunk-size", type=int, default=8192)
     parser.add_argument("--max-open-chunks", type=int, default=16)
@@ -107,7 +122,11 @@ def make_splits(config, seed):
     train_indices, val_indices = stratified_indices(source.targets, seed)
     train = BACKENDS[config.backend](source, True, config)
     val = BACKENDS[config.backend](source, False, config)
-    return Subset(train, train_indices), Subset(val, val_indices), make_dataset(config, "test")
+    return (
+        Subset(train, train_indices),
+        Subset(val, val_indices),
+        make_dataset(config, "test"),
+    )
 
 
 def main():
@@ -122,7 +141,9 @@ def main():
     for split in ("train", "val", "test"):
         dataset = make_dataset(config, split)
         stored = dataset.dataset if isinstance(dataset, TransformDataset) else dataset
-        print(f"{split}: {len(dataset)} samples, {getattr(stored, 'path', config.backend)}")
+        print(
+            f"{split}: {len(dataset)} samples, {getattr(stored, 'path', config.backend)}"
+        )
 
 
 if __name__ == "__main__":

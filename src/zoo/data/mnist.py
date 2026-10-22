@@ -15,10 +15,14 @@ from .cache import TensorChunks
 from .loaders import LoaderConfig, add_loader_arguments
 from .transforms import TransformDataset
 
-RESIZE = transforms.Resize((32, 32), interpolation=transforms.InterpolationMode.BILINEAR)
+RESIZE = transforms.Resize(
+    (32, 32), interpolation=transforms.InterpolationMode.BILINEAR
+)
 NORMALIZE = transforms.Normalize((0.1307,), (0.3081,))
 AFFINE = transforms.RandomAffine(
-    degrees=30, shear=10, interpolation=transforms.InterpolationMode.BILINEAR,
+    degrees=30,
+    shear=10,
+    interpolation=transforms.InterpolationMode.BILINEAR,
 )
 EVALUATE = transforms.Compose([RESIZE, transforms.ToTensor(), NORMALIZE])
 TRAIN = transforms.Compose([RESIZE, AFFINE, transforms.ToTensor(), NORMALIZE])
@@ -38,19 +42,40 @@ def pil_backend(source, training, config):
 def tensor_cache_backend(source, training, config):
     # Preserve PIL affine interpolation and integer rounding used by training.
     # Evaluation can cache the entire deterministic pipeline as float32.
-    preprocess = transforms.Compose([RESIZE, transforms.PILToTensor()]) if training else EVALUATE
-    metadata = dict(dataset="MNIST", source_sha256=source_digest(source),
-                    preprocessing="resize32-uint8-v1" if training else "resize32-normalized-f32-v1",
-                    mean=0.1307, std=0.3081, interpolation="PIL-bilinear",
-                    torchvision=torchvision.__version__, pillow=pillow_version)
+    preprocess = (
+        transforms.Compose([RESIZE, transforms.PILToTensor()]) if training else EVALUATE
+    )
+    metadata = {
+        "dataset": "MNIST",
+        "source_sha256": source_digest(source),
+        "preprocessing": "resize32-uint8-v1"
+        if training
+        else "resize32-normalized-f32-v1",
+        "mean": 0.1307,
+        "std": 0.3081,
+        "interpolation": "PIL-bilinear",
+        "torchvision": torchvision.__version__,
+        "pillow": pillow_version,
+    }
     stored = TensorChunks.prepare(
-        config.cache_dir, TransformDataset(source, preprocess), metadata,
-        chunk_size=config.chunk_size, max_open_chunks=config.max_open_chunks,
+        config.cache_dir,
+        TransformDataset(source, preprocess),
+        metadata,
+        chunk_size=config.chunk_size,
+        max_open_chunks=config.max_open_chunks,
     )
     if training:
-        return TransformDataset(stored, transforms.Compose([
-            transforms.ToPILImage(), AFFINE, transforms.ToTensor(), NORMALIZE,
-        ]))
+        return TransformDataset(
+            stored,
+            transforms.Compose(
+                [
+                    transforms.ToPILImage(),
+                    AFFINE,
+                    transforms.ToTensor(),
+                    NORMALIZE,
+                ]
+            ),
+        )
     return stored
 
 
@@ -76,7 +101,9 @@ class DataConfig(LoaderConfig):
 
 def add_data_arguments(parser):
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
-    parser.add_argument("--cache-dir", type=Path, default=Path("data/mnist-tensor-cache"))
+    parser.add_argument(
+        "--cache-dir", type=Path, default=Path("data/mnist-tensor-cache")
+    )
     parser.add_argument("--backend", choices=BACKENDS, default="pil")
     parser.add_argument("--chunk-size", type=int, default=8192)
     parser.add_argument("--max-open-chunks", type=int, default=16)
@@ -97,14 +124,20 @@ def make_dataset(config, split):
 
 
 def make_splits(config, seed):
-    indices = torch.randperm(60000, generator=torch.Generator().manual_seed(seed)).tolist()
-    return (Subset(make_dataset(config, "train"), indices[:-512]),
-            Subset(make_dataset(config, "val"), indices[-512:]),
-            make_dataset(config, "test"))
+    indices = torch.randperm(
+        60000, generator=torch.Generator().manual_seed(seed)
+    ).tolist()
+    return (
+        Subset(make_dataset(config, "train"), indices[:-512]),
+        Subset(make_dataset(config, "val"), indices[-512:]),
+        make_dataset(config, "test"),
+    )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Precompute deterministic MNIST tensor chunks.")
+    parser = argparse.ArgumentParser(
+        description="Precompute deterministic MNIST tensor chunks."
+    )
     add_data_arguments(parser)
     parser.set_defaults(backend="tensor-cache")
     args = parser.parse_args()
@@ -115,7 +148,9 @@ def main():
     for split in ("train", "val", "test"):
         dataset = make_dataset(config, split)
         stored = dataset.dataset if isinstance(dataset, TransformDataset) else dataset
-        print(f"{split}: {len(dataset)} samples, {getattr(stored, 'path', config.backend)}")
+        print(
+            f"{split}: {len(dataset)} samples, {getattr(stored, 'path', config.backend)}"
+        )
 
 
 if __name__ == "__main__":

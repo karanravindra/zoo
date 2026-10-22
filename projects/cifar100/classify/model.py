@@ -9,8 +9,11 @@ class ConvNeXtBlock(nn.Module):
         super().__init__()
         self.depthwise = nn.Conv2d(channels, channels, 7, padding=3, groups=channels)
         self.norm = nn.LayerNorm(channels)
-        self.mlp = nn.Sequential(nn.Linear(channels, 4 * channels), nn.GELU(),
-                                 nn.Linear(4 * channels, channels))
+        self.mlp = nn.Sequential(
+            nn.Linear(channels, 4 * channels),
+            nn.GELU(),
+            nn.Linear(4 * channels, channels),
+        )
         self.scale = nn.Parameter(torch.full((channels,), 1e-6))
 
     def forward(self, x):
@@ -34,7 +37,9 @@ class ConvNeXt(nn.Module):
             stages.extend(ConvNeXtBlock(width) for _ in range(depth))
             channels = width
         self.features = nn.Sequential(*stages)
-        self.head = nn.Sequential(nn.LayerNorm(channels), nn.Linear(channels, num_classes))
+        self.head = nn.Sequential(
+            nn.LayerNorm(channels), nn.Linear(channels, num_classes)
+        )
 
     def forward(self, x):
         return self.head(self.features(x).mean(dim=(-2, -1)))

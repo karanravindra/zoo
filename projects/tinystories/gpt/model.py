@@ -1,5 +1,5 @@
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 import torch
 from torch import nn
@@ -16,8 +16,16 @@ class GPTConfig:
     dropout: float = 0.0
 
     def __post_init__(self):
-        if min(self.vocab_size, self.context_length, self.n_layers,
-               self.n_heads, self.d_model) < 1:
+        if (
+            min(
+                self.vocab_size,
+                self.context_length,
+                self.n_layers,
+                self.n_heads,
+                self.d_model,
+            )
+            < 1
+        ):
             raise ValueError("Model dimensions must be positive")
         if self.d_model % self.n_heads:
             raise ValueError("d_model must be divisible by n_heads")
@@ -44,10 +52,15 @@ class Block(nn.Module):
     def forward(self, x):
         batch, length, width = x.shape
         q, k, v = self.qkv(self.attn_norm(x)).chunk(3, dim=-1)
-        q, k, v = [t.view(batch, length, self.n_heads, width // self.n_heads)
-                   .transpose(1, 2) for t in (q, k, v)]
+        q, k, v = [
+            t.view(batch, length, self.n_heads, width // self.n_heads).transpose(1, 2)
+            for t in (q, k, v)
+        ]
         attention = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True,
+            q,
+            k,
+            v,
+            is_causal=True,
             dropout_p=self.dropout if self.training else 0.0,
         )
         attention = attention.transpose(1, 2).contiguous().view(batch, length, width)
@@ -80,24 +93,33 @@ class GPT(nn.Module):
         if not 1 <= length <= self.config.context_length:
             raise ValueError("Input length must be between 1 and context_length")
         positions = torch.arange(length, device=tokens.device)
-        x = self.dropout(self.token_embedding(tokens) + self.position_embedding(positions))
+        x = self.dropout(
+            self.token_embedding(tokens) + self.position_embedding(positions)
+        )
         x = self.norm(self.blocks(x))
         # Reuse the embedding weights for the output projection.
         logits = F.linear(x, self.token_embedding.weight)
-        loss = None if targets is None else F.cross_entropy(
-            logits.reshape(-1, self.config.vocab_size), targets.reshape(-1),
+        loss = (
+            None
+            if targets is None
+            else F.cross_entropy(
+                logits.reshape(-1, self.config.vocab_size),
+                targets.reshape(-1),
+            )
         )
         return logits, loss
 
     @torch.inference_mode()
-    def generate(self, tokens, max_new_tokens=200, temperature=0.8, top_k=40, eos_id=None):
+    def generate(
+        self, tokens, max_new_tokens=200, temperature=0.8, top_k=40, eos_id=None
+    ):
         if max_new_tokens < 0 or temperature <= 0 or top_k < 0:
             raise ValueError("Require max_new_tokens >= 0, temperature > 0, top_k >= 0")
         if tokens.size(0) != 1:
             raise ValueError("Generation supports one prompt at a time")
         self.eval()
         for _ in range(max_new_tokens):
-            logits, _ = self(tokens[:, -self.config.context_length:])
+            logits, _ = self(tokens[:, -self.config.context_length :])
             logits = logits[:, -1] / temperature
             if top_k:
                 threshold = logits.topk(min(top_k, logits.size(-1))).values[:, -1:]

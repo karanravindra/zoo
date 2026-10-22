@@ -1,17 +1,16 @@
 import argparse
-from contextlib import nullcontext
 import csv
-from dataclasses import asdict
 import json
 import math
-from pathlib import Path
 import time
+from contextlib import nullcontext
+from dataclasses import asdict
+from pathlib import Path
 
 import torch
-
-from data import DATA_DIR, TokenData
 from model import GPT, GPTConfig
 
+from data import DATA_DIR, TokenData
 
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 
@@ -46,13 +45,23 @@ def make_optimizers(model, lr, weight_decay):
     remaining = [p for p in model.parameters() if id(p) not in hidden_ids]
     return {
         "muon": torch.optim.Muon(
-            hidden_weights, lr=lr, weight_decay=weight_decay, momentum=0.95,
+            hidden_weights,
+            lr=lr,
+            weight_decay=weight_decay,
+            momentum=0.95,
             adjust_lr_fn="match_rms_adamw",
         ),
-        "adamw": torch.optim.AdamW([
-            {"params": [p for p in remaining if p.ndim >= 2], "weight_decay": weight_decay},
-            {"params": [p for p in remaining if p.ndim < 2], "weight_decay": 0.0},
-        ], lr=lr, betas=(0.9, 0.95)),
+        "adamw": torch.optim.AdamW(
+            [
+                {
+                    "params": [p for p in remaining if p.ndim >= 2],
+                    "weight_decay": weight_decay,
+                },
+                {"params": [p for p in remaining if p.ndim < 2], "weight_decay": 0.0},
+            ],
+            lr=lr,
+            betas=(0.9, 0.95),
+        ),
     }
 
 
@@ -72,7 +81,9 @@ def evaluate(model, data, batch_size, batches, device):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train a roughly 5M-parameter GPT on TinyStories")
+    parser = argparse.ArgumentParser(
+        description="Train a roughly 5M-parameter GPT on TinyStories"
+    )
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument("--steps", type=int, default=1_000)
@@ -91,8 +102,16 @@ def main():
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--resume", type=Path)
     args = parser.parse_args()
-    for name in ("steps", "batch_size", "grad_accum", "context_length", "eval_every",
-                 "eval_batches", "log_every", "threads"):
+    for name in (
+        "steps",
+        "batch_size",
+        "grad_accum",
+        "context_length",
+        "eval_every",
+        "eval_batches",
+        "log_every",
+        "threads",
+    ):
         if getattr(args, name) < 1:
             parser.error(f"{name.replace('_', '-')} must be positive")
     if args.lr <= 0 or args.weight_decay < 0 or args.warmup_steps < 0:
@@ -104,8 +123,11 @@ def main():
     device = choose_device(args.device)
     data = TokenData(args.data_dir, args.context_length)
     tokenizer_json = (args.data_dir / "tokenizer.json").read_text()
-    config = GPTConfig(vocab_size=data.metadata["vocab_size"],
-                       context_length=args.context_length, dropout=args.dropout)
+    config = GPTConfig(
+        vocab_size=data.metadata["vocab_size"],
+        context_length=args.context_length,
+        dropout=args.dropout,
+    )
     model = GPT(config).to(device)
     optimizers = make_optimizers(model, args.lr, args.weight_decay)
     generator = torch.Generator().manual_seed(args.seed)
@@ -113,11 +135,20 @@ def main():
     if args.resume:
         checkpoint = torch.load(args.resume, map_location="cpu", weights_only=True)
         if checkpoint["config"] != asdict(config):
-            parser.error("Checkpoint model configuration does not match training arguments")
-        if checkpoint["tokenizer"] != tokenizer_json or checkpoint["data"] != data.metadata:
-            parser.error("Checkpoint tokenizer or dataset metadata does not match prepared data")
+            parser.error(
+                "Checkpoint model configuration does not match training arguments"
+            )
+        if (
+            checkpoint["tokenizer"] != tokenizer_json
+            or checkpoint["data"] != data.metadata
+        ):
+            parser.error(
+                "Checkpoint tokenizer or dataset metadata does not match prepared data"
+            )
         if set(checkpoint.get("optimizers", {})) != set(optimizers):
-            parser.error("Resuming requires a Muon + AdamW checkpoint; start a new run for older checkpoints")
+            parser.error(
+                "Resuming requires a Muon + AdamW checkpoint; start a new run for older checkpoints"
+            )
         model.load_state_dict(checkpoint["model"])
         for name, optimizer in optimizers.items():
             optimizer.load_state_dict(checkpoint["optimizers"][name])
@@ -135,19 +166,31 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
     parameters = sum(p.numel() for p in model.parameters())
     tokens_per_step = args.batch_size * args.grad_accum * args.context_length
-    print(f"Parameters: {parameters:,}; device: {device}; tokens/step: {tokens_per_step:,}")
+    print(
+        f"Parameters: {parameters:,}; device: {device}; tokens/step: {tokens_per_step:,}"
+    )
     metrics_path = args.output_dir / "metrics.csv"
     append = args.resume is not None and metrics_path.exists()
     with metrics_path.open("a" if append else "w", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=[
-            "step", "tokens_seen", "train_loss", "val_loss", "val_perplexity", "lr",
-        ])
+        writer = csv.DictWriter(
+            file,
+            fieldnames=[
+                "step",
+                "tokens_seen",
+                "train_loss",
+                "val_loss",
+                "val_perplexity",
+                "lr",
+            ],
+        )
         if not append:
             writer.writeheader()
         model.train()
         for step in range(start_step + 1, args.steps + 1):
             started = time.perf_counter()
-            lr = learning_rate(step, args.steps, min(args.warmup_steps, args.steps), args.lr)
+            lr = learning_rate(
+                step, args.steps, min(args.warmup_steps, args.steps), args.lr
+            )
             for optimizer in optimizers.values():
                 for group in optimizer.param_groups:
                     group["lr"] = lr
@@ -159,34 +202,60 @@ def main():
                     _, loss = compiled_model(x, y)
                 train_loss += loss.detach().item() / args.grad_accum
                 (loss / args.grad_accum).backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=True)
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), 1.0, error_if_nonfinite=True
+            )
             for optimizer in optimizers.values():
                 optimizer.step()
             tokens_seen += tokens_per_step
             if step % args.log_every == 0 or step == 1:
                 elapsed = time.perf_counter() - started
-                print(f"Step {step}/{args.steps}: loss={train_loss:.4f} lr={lr:.2e} "
-                      f"tokens/s={tokens_per_step / elapsed:,.0f}")
+                print(
+                    f"Step {step}/{args.steps}: loss={train_loss:.4f} lr={lr:.2e} "
+                    f"tokens/s={tokens_per_step / elapsed:,.0f}"
+                )
             if step % args.eval_every == 0 or step == args.steps:
-                val_loss = evaluate(compiled_model, data, args.batch_size, args.eval_batches, device)
+                val_loss = evaluate(
+                    compiled_model, data, args.batch_size, args.eval_batches, device
+                )
                 perplexity = math.exp(min(val_loss, 80))
                 improved = val_loss < best_loss
                 best_loss = min(best_loss, val_loss)
-                row = dict(step=step, tokens_seen=tokens_seen,
-                           train_loss=train_loss, val_loss=val_loss,
-                           val_perplexity=perplexity, lr=lr)
+                row = {
+                    "step": step,
+                    "tokens_seen": tokens_seen,
+                    "train_loss": train_loss,
+                    "val_loss": val_loss,
+                    "val_perplexity": perplexity,
+                    "lr": lr,
+                }
                 writer.writerow(row)
                 file.flush()
-                checkpoint = dict(
-                    model=model.state_dict(),
-                    optimizers={name: optimizer.state_dict() for name, optimizer in optimizers.items()},
-                    config=asdict(config), tokenizer=tokenizer_json, data=data.metadata,
-                    step=step, tokens_seen=tokens_seen, best_loss=best_loss,
-                    sampler_rng=generator.get_state(), torch_rng=torch.get_rng_state(),
-                    cuda_rng=torch.cuda.get_rng_state_all() if device.type == "cuda" else None,
-                    mps_rng=torch.mps.get_rng_state() if device.type == "mps" else None,
-                    args={k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
-                )
+                checkpoint = {
+                    "model": model.state_dict(),
+                    "optimizers": {
+                        name: optimizer.state_dict()
+                        for name, optimizer in optimizers.items()
+                    },
+                    "config": asdict(config),
+                    "tokenizer": tokenizer_json,
+                    "data": data.metadata,
+                    "step": step,
+                    "tokens_seen": tokens_seen,
+                    "best_loss": best_loss,
+                    "sampler_rng": generator.get_state(),
+                    "torch_rng": torch.get_rng_state(),
+                    "cuda_rng": torch.cuda.get_rng_state_all()
+                    if device.type == "cuda"
+                    else None,
+                    "mps_rng": torch.mps.get_rng_state()
+                    if device.type == "mps"
+                    else None,
+                    "args": {
+                        k: str(v) if isinstance(v, Path) else v
+                        for k, v in vars(args).items()
+                    },
+                }
                 # Replace only after serialization completes.
                 temporary = args.output_dir / "checkpoint.tmp"
                 torch.save(checkpoint, temporary)
@@ -194,11 +263,20 @@ def main():
                 if improved:
                     torch.save(checkpoint, temporary)
                     temporary.replace(args.output_dir / "best.pt")
-                summary = dict(parameters=parameters, device=str(device), **row,
-                               best_val_loss=best_loss, config=asdict(config))
-                (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-                print(f"Validation: loss={val_loss:.4f} perplexity={perplexity:.2f}; "
-                      f"checkpoint saved at step {step}")
+                summary = dict(
+                    parameters=parameters,
+                    device=str(device),
+                    **row,
+                    best_val_loss=best_loss,
+                    config=asdict(config),
+                )
+                (args.output_dir / "summary.json").write_text(
+                    json.dumps(summary, indent=2) + "\n"
+                )
+                print(
+                    f"Validation: loss={val_loss:.4f} perplexity={perplexity:.2f}; "
+                    f"checkpoint saved at step {step}"
+                )
 
 
 if __name__ == "__main__":

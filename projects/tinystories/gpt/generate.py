@@ -2,14 +2,15 @@ import argparse
 from pathlib import Path
 
 import torch
-from tokenizers import Tokenizer
-
 from model import GPT, GPTConfig
+from tokenizers import Tokenizer
 from train import OUTPUT_DIR, choose_device
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate a story with a trained TinyStories GPT")
+    parser = argparse.ArgumentParser(
+        description="Generate a story with a trained TinyStories GPT"
+    )
     parser.add_argument("--checkpoint", type=Path, default=OUTPUT_DIR / "best.pt")
     parser.add_argument("--prompt", default="Once upon a time, there was a little")
     parser.add_argument("--max-new-tokens", type=int, default=200)
@@ -31,8 +32,13 @@ def main():
     if not ids:
         ids = [checkpoint["data"]["eos_id"]]
     tokens = torch.tensor([ids], dtype=torch.long, device=device)
-    result = model.generate(tokens, args.max_new_tokens, args.temperature, args.top_k,
-                            checkpoint["data"]["eos_id"])
+    result = model.generate(
+        tokens,
+        args.max_new_tokens,
+        args.temperature,
+        args.top_k,
+        checkpoint["data"]["eos_id"],
+    )
     print(tokenizer.decode(result[0].tolist()))
 
 

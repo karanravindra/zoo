@@ -1,6 +1,6 @@
 import argparse
-from itertools import islice
 import json
+from itertools import islice
 from pathlib import Path
 
 import numpy as np
@@ -19,11 +19,15 @@ def stories(split, local_file=None, limit=None):
         from datasets import load_dataset
 
         dataset = load_dataset("roneneldan/TinyStories", split=split, streaming=True)
-        yield from islice((row["text"] for row in dataset if row["text"].strip()), limit)
+        yield from islice(
+            (row["text"] for row in dataset if row["text"].strip()), limit
+        )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train a BPE tokenizer and pack TinyStories tokens")
+    parser = argparse.ArgumentParser(
+        description="Train a BPE tokenizer and pack TinyStories tokens"
+    )
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
     parser.add_argument("--vocab-size", type=int, default=4096)
     parser.add_argument("--tokenizer-stories", type=int, default=100_000)
@@ -46,11 +50,16 @@ def main():
     tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
     tokenizer.decoder = decoders.ByteLevel()
     trainer = trainers.BpeTrainer(
-        vocab_size=args.vocab_size, special_tokens=[EOS],
+        vocab_size=args.vocab_size,
+        special_tokens=[EOS],
         initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
     )
-    tokenizer_limit = min(args.tokenizer_stories, args.train_stories or args.tokenizer_stories)
-    tokenizer.train_from_iterator(stories("train", args.train_file, tokenizer_limit), trainer)
+    tokenizer_limit = min(
+        args.tokenizer_stories, args.train_stories or args.tokenizer_stories
+    )
+    tokenizer.train_from_iterator(
+        stories("train", args.train_file, tokenizer_limit), trainer
+    )
     tokenizer.save(str(args.data_dir / "tokenizer.json"))
     eos_id = tokenizer.token_to_id(EOS)
     counts, story_counts = {}, {}
@@ -61,7 +70,9 @@ def main():
         count, story_count = 0, 0
         buffer = []
         with (args.data_dir / f"{split}.bin").open("wb") as file:
-            for story in tqdm(stories(split, local_file, limit), desc=split, unit=" stories"):
+            for story in tqdm(
+                stories(split, local_file, limit), desc=split, unit=" stories"
+            ):
                 buffer.append(story)
                 if len(buffer) == 1000:
                     count += write_batch(file, tokenizer, buffer, eos_id)
@@ -72,9 +83,14 @@ def main():
         if not count:
             raise ValueError(f"{split} has no stories")
         counts[split], story_counts[split] = count, story_count
-    metadata = dict(dataset="local" if args.train_file else "roneneldan/TinyStories",
-                    vocab_size=tokenizer.get_vocab_size(), eos_id=eos_id,
-                    dtype="uint16", tokens=counts, stories=story_counts)
+    metadata = {
+        "dataset": "local" if args.train_file else "roneneldan/TinyStories",
+        "vocab_size": tokenizer.get_vocab_size(),
+        "eos_id": eos_id,
+        "dtype": "uint16",
+        "tokens": counts,
+        "stories": story_counts,
+    }
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
     print(json.dumps(metadata, indent=2))
 

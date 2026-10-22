@@ -31,8 +31,13 @@ with patch.dict(sys.modules, model=model_module, reports=reports_module):
 class FakeCIFAR100:
     def __init__(self, count=23):
         self.classes = [f"class_{index}" for index in range(100)]
-        self.data = torch.randint(0, 256, (count, 32, 32, 3), dtype=torch.uint8,
-                                  generator=torch.Generator().manual_seed(12)).numpy()
+        self.data = torch.randint(
+            0,
+            256,
+            (count, 32, 32, 3),
+            dtype=torch.uint8,
+            generator=torch.Generator().manual_seed(12),
+        ).numpy()
         self.targets = (torch.arange(count) % 100).tolist()
 
     def __len__(self):
@@ -49,8 +54,12 @@ class CIFAR100Tests(unittest.TestCase):
         self.assertEqual((len(train), len(val)), (45000, 5000))
         self.assertFalse(set(train) & set(val))
         self.assertEqual(len(set(train) | set(val)), 50000)
-        self.assertTrue(torch.equal(torch.bincount(targets[val]), torch.full((100,), 50)))
-        self.assertTrue(torch.equal(torch.bincount(targets[train]), torch.full((100,), 450)))
+        self.assertTrue(
+            torch.equal(torch.bincount(targets[val]), torch.full((100,), 50))
+        )
+        self.assertTrue(
+            torch.equal(torch.bincount(targets[train]), torch.full((100,), 450))
+        )
         self.assertEqual((train, val), stratified_indices(targets, 42))
         self.assertNotEqual(val, stratified_indices(targets, 43)[1])
 
@@ -73,8 +82,15 @@ class CIFAR100Tests(unittest.TestCase):
         ):
             for split in ("train", "val", "test"):
                 reference = make_dataset(DataConfig(), split)
-                cached = make_dataset(DataConfig(backend="tensor-cache", cache_dir=Path(temporary),
-                                                 chunk_size=5, max_open_chunks=2), split)
+                cached = make_dataset(
+                    DataConfig(
+                        backend="tensor-cache",
+                        cache_dir=Path(temporary),
+                        chunk_size=5,
+                        max_open_chunks=2,
+                    ),
+                    split,
+                )
                 for index in range(len(reference)):
                     torch.manual_seed(index)
                     expected, label = reference[index]
@@ -89,25 +105,42 @@ class CIFAR100Tests(unittest.TestCase):
                     torch.manual_seed(2)
                     self.assertFalse(torch.equal(first, cached[0][0]))
             # Reopening a normalized cache must preserve metadata identity.
-            make_dataset(DataConfig(backend="tensor-cache", cache_dir=Path(temporary), chunk_size=5), "val")
+            make_dataset(
+                DataConfig(
+                    backend="tensor-cache", cache_dir=Path(temporary), chunk_size=5
+                ),
+                "val",
+            )
 
     def test_model_backward_and_configuration(self):
         model = model_module.ConvNeXt(widths=(8, 16, 32), depths=(1, 1, 1))
         output = model(torch.randn(3, 3, 32, 32))
         self.assertEqual(output.shape, (3, 100))
         torch.nn.functional.cross_entropy(output, torch.tensor([0, 50, 99])).backward()
-        self.assertTrue(all(parameter.grad is not None for parameter in model.parameters()))
+        self.assertTrue(
+            all(parameter.grad is not None for parameter in model.parameters())
+        )
         with self.assertRaises(ValueError):
             model_module.ConvNeXt(widths=(8, 16), depths=(1,))
 
     def test_evaluation_weights_partial_batches_and_top5(self):
-        logits = torch.tensor([[9., 8., 7., 6., 5., 4.],
-                               [9., 8., 7., 6., 5., 4.],
-                               [9., 8., 7., 6., 5., 4.]])
+        logits = torch.tensor(
+            [
+                [9.0, 8.0, 7.0, 6.0, 5.0, 4.0],
+                [9.0, 8.0, 7.0, 6.0, 5.0, 4.0],
+                [9.0, 8.0, 7.0, 6.0, 5.0, 4.0],
+            ]
+        )
         labels = torch.tensor([0, 4, 5])
         loader = DataLoader(TensorDataset(logits, labels), batch_size=2)
-        metrics, targets, predictions = training.evaluate(torch.nn.Identity(), loader, torch.device("cpu"))
-        self.assertAlmostEqual(metrics["loss"], torch.nn.functional.cross_entropy(logits, labels).item(), places=5)
+        metrics, targets, predictions = training.evaluate(
+            torch.nn.Identity(), loader, torch.device("cpu")
+        )
+        self.assertAlmostEqual(
+            metrics["loss"],
+            torch.nn.functional.cross_entropy(logits, labels).item(),
+            places=5,
+        )
         self.assertAlmostEqual(metrics["top1"], 1 / 3)
         self.assertAlmostEqual(metrics["top5"], 2 / 3)
         self.assertEqual(metrics["samples"], 3)
@@ -128,16 +161,20 @@ class CIFAR100Tests(unittest.TestCase):
         new_optimizer.load_state_dict(optimizer.state_dict())
         new_scheduler.load_state_dict(scheduler.state_dict())
         for _ in range(4):
-            self.assertEqual(optimizer.param_groups[0]["lr"], new_optimizer.param_groups[0]["lr"])
+            self.assertEqual(
+                optimizer.param_groups[0]["lr"], new_optimizer.param_groups[0]["lr"]
+            )
             rates.append(optimizer.param_groups[0]["lr"])
             optimizer.step()
             new_optimizer.step()
             scheduler.step()
             new_scheduler.step()
         self.assertEqual(rates[:2], [0.05, 0.1])
-        self.assertAlmostEqual(rates[-1], 0.)
+        self.assertAlmostEqual(rates[-1], 0.0)
 
-    def test_epoch_checkpoint_resume_matches_uninterrupted_training_and_evaluation(self):
+    def test_epoch_checkpoint_resume_matches_uninterrupted_training_and_evaluation(
+        self,
+    ):
         from zoo.data import TransformDataset
         from zoo.data.cifar100 import EVALUATE, TRAIN
 
@@ -148,31 +185,78 @@ class CIFAR100Tests(unittest.TestCase):
         test.classes = source.classes
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            common = ["train.py", "--epochs", "2", "--warmup-epochs", "1", "--batch-size", "4",
-                      "--widths", "4", "8", "--depths", "1", "1", "--max-train-batches", "2",
-                      "--max-eval-batches", "2", "--log-every", "1"]
+            common = [
+                "train.py",
+                "--epochs",
+                "2",
+                "--warmup-epochs",
+                "1",
+                "--batch-size",
+                "4",
+                "--widths",
+                "4",
+                "8",
+                "--depths",
+                "1",
+                "1",
+                "--max-train-batches",
+                "2",
+                "--max-eval-batches",
+                "2",
+                "--log-every",
+                "1",
+            ]
 
             def run(extra):
                 with (
                     patch.object(sys, "argv", common + extra),
-                    patch.object(training, "make_splits", return_value=(train, val, test)),
+                    patch.object(
+                        training, "make_splits", return_value=(train, val, test)
+                    ),
                     patch.object(training, "write_reports"),
                 ):
                     training.main()
 
             run(["--output-dir", str(root / "full")])
             run(["--output-dir", str(root / "resume"), "--stop-after-epoch", "1"])
-            run(["--output-dir", str(root / "resume"), "--resume", str(root / "resume/checkpoint.pt")])
+            run(
+                [
+                    "--output-dir",
+                    str(root / "resume"),
+                    "--resume",
+                    str(root / "resume/checkpoint.pt"),
+                ]
+            )
             full = torch.load(root / "full/checkpoint.pt", weights_only=True)
             resumed = torch.load(root / "resume/checkpoint.pt", weights_only=True)
             for key in full["model"]:
-                self.assertTrue(torch.equal(full["model"][key], resumed["model"][key]), key)
+                self.assertTrue(
+                    torch.equal(full["model"][key], resumed["model"][key]), key
+                )
             self.assertEqual(full["scheduler"], resumed["scheduler"])
             self.assertEqual((resumed["epoch"], resumed["step"]), (2, 4))
             for first, second in zip(full["history"], resumed["history"]):
-                self.assertEqual({key: value for key, value in first.items() if key != "elapsed_seconds"},
-                                 {key: value for key, value in second.items() if key != "elapsed_seconds"})
-            run(["--output-dir", str(root / "eval"), "--resume", str(root / "resume/best.pt"), "--eval-only"])
+                self.assertEqual(
+                    {
+                        key: value
+                        for key, value in first.items()
+                        if key != "elapsed_seconds"
+                    },
+                    {
+                        key: value
+                        for key, value in second.items()
+                        if key != "elapsed_seconds"
+                    },
+                )
+            run(
+                [
+                    "--output-dir",
+                    str(root / "eval"),
+                    "--resume",
+                    str(root / "resume/best.pt"),
+                    "--eval-only",
+                ]
+            )
             first = json.loads((root / "full/summary.json").read_text())
             second = json.loads((root / "eval/summary.json").read_text())
             self.assertEqual(first["test"], second["test"])

@@ -53,8 +53,12 @@ class TensorChunks(Dataset):
         """
         if chunk_size < 1 or len(dataset) < 1:
             raise ValueError("chunk_size and dataset length must be positive")
-        identity = dict(format_version=cls.FORMAT_VERSION, metadata=metadata,
-                        count=len(dataset), chunk_size=chunk_size)
+        identity = {
+            "format_version": cls.FORMAT_VERSION,
+            "metadata": metadata,
+            "count": len(dataset),
+            "chunk_size": chunk_size,
+        }
         encoded = json.dumps(identity, sort_keys=True)
         key = hashlib.sha256(encoded.encode()).hexdigest()[:24]
         root = Path(root)
@@ -65,15 +69,24 @@ class TensorChunks(Dataset):
             try:
                 chunks = []
                 for start in range(0, len(dataset), chunk_size):
-                    samples = [dataset[i] for i in range(start, min(start + chunk_size, len(dataset)))]
+                    samples = [
+                        dataset[i]
+                        for i in range(start, min(start + chunk_size, len(dataset)))
+                    ]
                     images, labels = zip(*samples)
                     filename = f"chunk-{len(chunks):05d}.pt"
-                    torch.save({"images": torch.stack(images),
-                                "labels": torch.as_tensor(labels, dtype=torch.long)},
-                               temporary / filename)
-                    chunks.append(dict(file=filename, count=len(samples)))
+                    torch.save(
+                        {
+                            "images": torch.stack(images),
+                            "labels": torch.as_tensor(labels, dtype=torch.long),
+                        },
+                        temporary / filename,
+                    )
+                    chunks.append({"file": filename, "count": len(samples)})
                 manifest = dict(identity, chunks=chunks)
-                (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+                (temporary / "manifest.json").write_text(
+                    json.dumps(manifest, indent=2) + "\n"
+                )
                 try:
                     temporary.rename(path)
                 except OSError:
@@ -107,7 +120,9 @@ class TensorChunks(Dataset):
         if chunk_index not in self._chunks:
             chunk = self.manifest["chunks"][chunk_index]
             self._chunks[chunk_index] = torch.load(
-                self.path / chunk["file"], mmap=True, weights_only=True,
+                self.path / chunk["file"],
+                mmap=True,
+                weights_only=True,
                 map_location="cpu",
             )
             if len(self._chunks) > self.max_open_chunks:
