@@ -12,3 +12,5 @@ wheels/
 # Downloaded datasets and experiment artifacts
 /data/
 /projects/mnist/classify/outputs/
+/projects/cifar100/classify/outputs/
+/projects/tinystories/gpt/outputs/
