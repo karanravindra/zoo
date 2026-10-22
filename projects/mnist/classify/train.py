@@ -85,6 +85,7 @@ def plot_results(history, targets, predictions, test_data, output):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=10)
+    parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
@@ -93,8 +94,8 @@ def main():
     parser.add_argument("--output-dir", type=Path,
                         default=Path(__file__).parent / "outputs")
     args = parser.parse_args()
-    if args.steps < 1 or args.batch_size < 1 or args.lr <= 0:
-        parser.error("steps, batch-size, and lr must be positive")
+    if args.steps < 1 or args.log_every < 1 or args.batch_size < 1 or args.lr <= 0:
+        parser.error("steps, log-every, batch-size, and lr must be positive")
 
     torch.manual_seed(args.seed)
     torch.set_num_threads(4)
@@ -148,15 +149,16 @@ def main():
             lr = optimizer.param_groups[0]["lr"]
             optimizer.step()
             scheduler.step()
-            val_loss, val_accuracy, _, _ = evaluate(model, val_loader, device)
-            row = dict(step=step, train_loss=loss.item(),
-                       train_accuracy=(logits.argmax(1) == labels).float().mean().item(),
-                       val_loss=val_loss, val_accuracy=val_accuracy, lr=lr)
-            history.append(row)
-            writer.writerow(row)
-            file.flush()
-            print(f"Step {step:3d}/{args.steps}: loss={loss.item():.4f} "
-                  f"val_loss={val_loss:.4f} val_accuracy={val_accuracy:.1%} lr={lr:.2e}")
+            if step % args.log_every == 0 or step == args.steps:
+                val_loss, val_accuracy, _, _ = evaluate(model, val_loader, device)
+                row = dict(step=step, train_loss=loss.item(),
+                           train_accuracy=(logits.argmax(1) == labels).float().mean().item(),
+                           val_loss=val_loss, val_accuracy=val_accuracy, lr=lr)
+                history.append(row)
+                writer.writerow(row)
+                file.flush()
+                print(f"Step {step:3d}/{args.steps}: loss={loss.item():.4f} "
+                      f"val_loss={val_loss:.4f} val_accuracy={val_accuracy:.1%} lr={lr:.2e}")
 
     test_loss, test_accuracy, targets, predictions = evaluate(model, test_loader, device)
     plot_results(history, targets, predictions, test_data, output)
