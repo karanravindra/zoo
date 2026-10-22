@@ -58,7 +58,7 @@ The first iterations include compilation time. Checkpoints store the original mo
 
 | Setting | Default |
 | --- | --- |
-| Trainable parameters | 6,693,376 with a 4,096-token vocabulary |
+| Trainable parameters | 6,562,304 with a 4,096-token vocabulary |
 | Transformer layers | 8 |
 | Hidden width | 256 |
 | Attention heads | 4 |
@@ -74,10 +74,10 @@ The first iterations include compilation time. Checkpoints store the original mo
 | Peak learning rate | 0.0003 |
 | Warmup | 200 optimizer steps |
 
-The model uses learned position embeddings, normalization before each sublayer, GELU activations, and causal grouped-query attention. Four query heads share one key/value head.
+The model uses rotary positional embeddings (RoPE), normalization before each sublayer, GELU activations, and causal grouped-query attention. Four query heads share one key/value head.
 Its output projection shares the token embedding weights.
 Training uses Muon for attention and feed-forward matrix weights.
-AdamW updates token embeddings, position embeddings, and normalization parameters, with no weight decay on normalization parameters.
+AdamW updates token embeddings and normalization parameters, with no weight decay on normalization parameters.
 Muon uses momentum 0.95 and PyTorch's `match_rms_adamw` update scaling, allowing both optimizers to share `--lr`.
 Both use cosine learning-rate decay to 10% of the peak rate, with gradient clipping at a norm of 1 before either optimizer steps.
 Loss is next-token cross-entropy. Training windows can cross story boundaries, with end-of-story tokens marking each boundary.

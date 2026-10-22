@@ -16,6 +16,7 @@ class GPTConfig:
     n_kv_heads: int = 1
     d_model: int = 256
     dropout: float = 0.0
+    rope_theta: float = 10_000.0
 
     def __post_init__(self):
         if (
@@ -32,10 +33,14 @@ class GPTConfig:
             raise ValueError("Model dimensions must be positive")
         if self.d_model % self.n_heads:
             raise ValueError("d_model must be divisible by n_heads")
+        if (self.d_model // self.n_heads) % 2:
+            raise ValueError("head dimension must be even for RoPE")
         if self.n_heads % self.n_kv_heads:
             raise ValueError("n_heads must be divisible by n_kv_heads")
         if not 0 <= self.dropout < 1:
             raise ValueError("dropout must be in [0, 1)")
+        if self.rope_theta <= 0:
+            raise ValueError("rope_theta must be positive")
 
 
 class Block(nn.Module):
@@ -59,6 +64,21 @@ class Block(nn.Module):
             nn.Linear(4 * config.d_model, config.d_model, bias=False),
         )
         self.residual_dropout = nn.Dropout(config.dropout)
+        frequencies = 1.0 / (
+            config.rope_theta
+            ** (torch.arange(0, self.head_dim, 2, dtype=torch.float32) / self.head_dim)
+        )
+        positions = torch.arange(config.context_length, dtype=torch.float32)
+        angles = torch.outer(positions, frequencies)
+        self.register_buffer("rope_cos", angles.cos(), persistent=False)
+        self.register_buffer("rope_sin", angles.sin(), persistent=False)
+
+    def apply_rope(self, x, length):
+        cos = self.rope_cos[:length].to(dtype=x.dtype)[None, None, :, :, None]
+        sin = self.rope_sin[:length].to(dtype=x.dtype)[None, None, :, :, None]
+        x = x.unflatten(-1, (-1, 2))
+        rotated = torch.stack((-x[..., 1], x[..., 0]), dim=-1)
+        return (x * cos + rotated * sin).flatten(-2)
 
     def forward(self, x):
         batch, length, width = x.shape
@@ -71,6 +91,8 @@ class Block(nn.Module):
             t.view(batch, length, self.n_kv_heads, self.head_dim).transpose(1, 2)
             for t in (k, v)
         ]
+        q = self.apply_rope(q, length)
+        k = self.apply_rope(k, length)
         attention = F.scaled_dot_product_attention(
             q,
             k,
@@ -90,7 +112,6 @@ class GPT(nn.Module):
         self.config = config or GPTConfig()
         config = self.config
         self.token_embedding = nn.Embedding(config.vocab_size, config.d_model)
-        self.position_embedding = nn.Embedding(config.context_length, config.d_model)
         self.dropout = nn.Dropout(config.dropout)
         self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layers)])
         self.norm = nn.LayerNorm(config.d_model)
@@ -108,10 +129,7 @@ class GPT(nn.Module):
         length = tokens.size(1)
         if not 1 <= length <= self.config.context_length:
             raise ValueError("Input length must be between 1 and context_length")
-        positions = torch.arange(length, device=tokens.device)
-        x = self.dropout(
-            self.token_embedding(tokens) + self.position_embedding(positions)
-        )
+        x = self.dropout(self.token_embedding(tokens))
         x = self.norm(self.blocks(x))
         # Reuse the embedding weights for the output projection.
         logits = F.linear(x, self.token_embedding.weight)

@@ -35,7 +35,7 @@ class TinyStoriesTests(unittest.TestCase):
     def test_default_parameter_budget(self):
         model = model_module.GPT()
         count = sum(p.numel() for p in model.parameters())
-        self.assertTrue(6_600_000 <= count <= 6_700_000, count)
+        self.assertTrue(6_500_000 <= count <= 6_600_000, count)
 
     def test_grouped_query_attention_configuration(self):
         config = model_module.GPTConfig(
@@ -52,6 +52,8 @@ class TinyStoriesTests(unittest.TestCase):
         self.assertEqual(logits.shape, (2, 8, 16))
         with self.assertRaisesRegex(ValueError, "n_heads"):
             model_module.GPTConfig(n_heads=4, n_kv_heads=3)
+        with self.assertRaisesRegex(ValueError, "head dimension"):
+            model_module.GPTConfig(n_heads=3, d_model=33)
 
     def test_muon_routes_hidden_weights_and_adamw_routes_embeddings_and_norms(self):
         model = model_module.GPT(
@@ -84,7 +86,6 @@ class TinyStoriesTests(unittest.TestCase):
         self.assertEqual(muon_ids | adamw_ids, {id(p) for p in model.parameters()})
         self.assertEqual(sum(map(len, routed.values())), len(list(model.parameters())))
         self.assertIn(id(model.token_embedding.weight), adamw_ids)
-        self.assertIn(id(model.position_embedding.weight), adamw_ids)
         for group in optimizers["adamw"].param_groups:
             for parameter in group["params"]:
                 self.assertEqual(
