@@ -13,6 +13,7 @@ from torch import nn
 
 from zoo.data import make_loader
 from zoo.data.mnist import add_data_arguments, config_from_args, make_splits
+from zoo.progress import StepProgress
 
 
 @torch.inference_mode()
@@ -140,6 +141,7 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.steps)
     history = []
     batches = iter(train_loader)
+    progress = StepProgress()
 
     with (output / "metrics.csv").open("w", newline="") as file:
         writer = csv.DictWriter(
@@ -169,6 +171,7 @@ def main():
             lr = optimizer.param_groups[0]["lr"]
             optimizer.step()
             scheduler.step()
+            progress.complete(step)
             if step % args.log_every == 0 or step == args.steps:
                 val_loss, val_accuracy, _, _ = evaluate(model, val_loader, device)
                 row = {
@@ -187,7 +190,8 @@ def main():
                 file.flush()
                 print(
                     f"Step {step:3d}/{args.steps}: loss={loss.item():.4f} "
-                    f"val_loss={val_loss:.4f} val_accuracy={val_accuracy:.1%} lr={lr:.2e}"
+                    f"val_loss={val_loss:.4f} val_accuracy={val_accuracy:.1%} lr={lr:.2e} "
+                    f"{progress.status(step, args.steps)}"
                 )
 
     test_loss, test_accuracy, targets, predictions = evaluate(

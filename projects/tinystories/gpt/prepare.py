@@ -3,6 +3,7 @@ import json
 from itertools import islice
 from pathlib import Path
 
+import gigatoken as gt
 import numpy as np
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from tqdm import tqdm
@@ -62,6 +63,8 @@ def main():
     )
     tokenizer.save(str(args.data_dir / "tokenizer.json"))
     eos_id = tokenizer.token_to_id(EOS)
+    vocab_size = tokenizer.get_vocab_size()
+    tokenizer = gt.Tokenizer(tokenizer)
     counts, story_counts = {}, {}
     for split, local_file, limit in (
         ("train", args.train_file, args.train_stories),
@@ -85,7 +88,7 @@ def main():
         counts[split], story_counts[split] = count, story_count
     metadata = {
         "dataset": "local" if args.train_file else "roneneldan/TinyStories",
-        "vocab_size": tokenizer.get_vocab_size(),
+        "vocab_size": vocab_size,
         "eos_id": eos_id,
         "dtype": "uint16",
         "tokens": counts,
@@ -98,7 +101,7 @@ def main():
 def write_batch(file, tokenizer, stories_batch, eos_id):
     tokens = []
     for encoding in tokenizer.encode_batch(stories_batch):
-        tokens.extend(encoding.ids)
+        tokens.extend(encoding)
         tokens.append(eos_id)
     np.asarray(tokens, dtype=np.uint16).tofile(file)
     return len(tokens)

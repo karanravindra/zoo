@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 
+import gigatoken as gt
 import torch
 from model import GPT, GPTConfig
 from tokenizers import Tokenizer
@@ -25,10 +26,14 @@ def main():
     torch.set_num_threads(4)
     device = choose_device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-    tokenizer = Tokenizer.from_str(checkpoint["tokenizer"])
-    model = GPT(GPTConfig(**checkpoint["config"])).to(device)
+    tokenizer = gt.Tokenizer(Tokenizer.from_str(checkpoint["tokenizer"]))
+    config = checkpoint["config"]
+    # Older checkpoints used one key/value head per query head.
+    if "n_kv_heads" not in config:
+        config = {**config, "n_kv_heads": config["n_heads"]}
+    model = GPT(GPTConfig(**config)).to(device)
     model.load_state_dict(checkpoint["model"])
-    ids = tokenizer.encode(args.prompt).ids
+    ids = tokenizer.encode(args.prompt).tolist()
     if not ids:
         ids = [checkpoint["data"]["eos_id"]]
     tokens = torch.tensor([ids], dtype=torch.long, device=device)
@@ -39,7 +44,7 @@ def main():
         args.top_k,
         checkpoint["data"]["eos_id"],
     )
-    print(tokenizer.decode(result[0].tolist()))
+    print(tokenizer.decode(result[0].tolist()).decode())
 
 
 if __name__ == "__main__":

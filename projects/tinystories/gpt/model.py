@@ -4,14 +4,16 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torchinfo import summary
 
 
 @dataclass
 class GPTConfig:
     vocab_size: int = 4096
     context_length: int = 512
-    n_layers: int = 5
+    n_layers: int = 8
     n_heads: int = 4
+    n_kv_heads: int = 1
     d_model: int = 256
     dropout: float = 0.0
 
@@ -22,6 +24,7 @@ class GPTConfig:
                 self.context_length,
                 self.n_layers,
                 self.n_heads,
+                self.n_kv_heads,
                 self.d_model,
             )
             < 1
@@ -29,6 +32,8 @@ class GPTConfig:
             raise ValueError("Model dimensions must be positive")
         if self.d_model % self.n_heads:
             raise ValueError("d_model must be divisible by n_heads")
+        if self.n_heads % self.n_kv_heads:
+            raise ValueError("n_heads must be divisible by n_kv_heads")
         if not 0 <= self.dropout < 1:
             raise ValueError("dropout must be in [0, 1)")
 
@@ -37,9 +42,15 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.n_heads = config.n_heads
+        self.n_kv_heads = config.n_kv_heads
+        self.head_dim = config.d_model // config.n_heads
         self.dropout = config.dropout
         self.attn_norm = nn.LayerNorm(config.d_model)
-        self.qkv = nn.Linear(config.d_model, 3 * config.d_model, bias=False)
+        self.qkv = nn.Linear(
+            config.d_model,
+            config.d_model + 2 * config.n_kv_heads * self.head_dim,
+            bias=False,
+        )
         self.proj = nn.Linear(config.d_model, config.d_model, bias=False)
         self.mlp_norm = nn.LayerNorm(config.d_model)
         self.mlp = nn.Sequential(
@@ -51,10 +62,14 @@ class Block(nn.Module):
 
     def forward(self, x):
         batch, length, width = x.shape
-        q, k, v = self.qkv(self.attn_norm(x)).chunk(3, dim=-1)
-        q, k, v = [
-            t.view(batch, length, self.n_heads, width // self.n_heads).transpose(1, 2)
-            for t in (q, k, v)
+        q, k, v = self.qkv(self.attn_norm(x)).split(
+            (width, self.n_kv_heads * self.head_dim, self.n_kv_heads * self.head_dim),
+            dim=-1,
+        )
+        q = q.view(batch, length, self.n_heads, self.head_dim).transpose(1, 2)
+        k, v = [
+            t.view(batch, length, self.n_kv_heads, self.head_dim).transpose(1, 2)
+            for t in (k, v)
         ]
         attention = F.scaled_dot_product_attention(
             q,
@@ -62,6 +77,7 @@ class Block(nn.Module):
             v,
             is_causal=True,
             dropout_p=self.dropout if self.training else 0.0,
+            enable_gqa=self.n_kv_heads != self.n_heads,
         )
         attention = attention.transpose(1, 2).contiguous().view(batch, length, width)
         x = x + self.residual_dropout(self.proj(attention))
@@ -129,3 +145,7 @@ class GPT(nn.Module):
             if eos_id is not None and next_token.item() == eos_id:
                 break
         return tokens
+
+
+if __name__ == "__main__":
+    summary(GPT(), input_data=torch.zeros((1, 512), dtype=torch.long), depth=2)

@@ -14,6 +14,7 @@ from torch import nn
 
 from zoo.data import make_loader
 from zoo.data.cifar100 import add_data_arguments, config_from_args, make_splits
+from zoo.progress import StepProgress
 
 
 def batch_metrics(logits, labels):
@@ -233,6 +234,7 @@ def main():
             restored["best_model"],
         )
     start = time.perf_counter()
+    progress = StepProgress(step)
 
     def record(epoch, totals, lr):
         validation, _, _ = evaluate(model, val_loader, device, args.max_eval_batches)
@@ -254,7 +256,8 @@ def main():
             f"Epoch {epoch}/{args.epochs}, step {step}: train_loss={train['loss']:.4f} "
             f"train_top1={train['top1']:.2%} train_top5={train['top5']:.2%} "
             f"val_loss={validation['loss']:.4f} val_top1={validation['top1']:.2%} "
-            f"val_top5={validation['top5']:.2%} elapsed={row['elapsed_seconds']:.1f}s",
+            f"val_top5={validation['top5']:.2%} elapsed={row['elapsed_seconds']:.1f}s "
+            f"{progress.status(step, total_steps)}",
             flush=True,
         )
         return validation
@@ -276,6 +279,7 @@ def main():
                 optimizer.step()
                 scheduler.step()
                 step += 1
+                progress.complete(step)
                 top1, top5 = batch_metrics(logits, labels)
                 totals[0] += loss.item() * len(labels)
                 totals[1] += top1

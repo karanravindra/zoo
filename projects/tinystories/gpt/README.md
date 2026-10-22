@@ -1,7 +1,7 @@
 # TinyStories GPT
 
 Train a decoder-only GPT from scratch on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories).
-The default model has about 5.1 million trainable parameters, including embeddings.
+The default model has about 6.7 million trainable parameters, including embeddings.
 
 ## Setup
 
@@ -17,7 +17,7 @@ uv sync --extra tinystories
 uv run --extra tinystories python projects/tinystories/gpt/prepare.py
 ```
 
-Preparation trains a 4,096-token byte-level BPE (byte pair encoding) tokenizer on the first 100,000 training stories.
+Preparation trains a 4,096-token byte-level BPE (byte pair encoding) tokenizer on the first 100,000 training stories. It uses Gigatoken by default to encode the corpus.
 It then streams the official training and validation splits into packed token files.
 Every story ends with `<|endoftext|>`. The tokenizer never trains on validation stories.
 Byte-level encoding can represent any UTF-8 text without an unknown-token fallback.
@@ -58,12 +58,13 @@ The first iterations include compilation time. Checkpoints store the original mo
 
 | Setting | Default |
 | --- | --- |
-| Trainable parameters | 5,117,440 with a 4,096-token vocabulary |
-| Transformer layers | 5 |
+| Trainable parameters | 6,693,376 with a 4,096-token vocabulary |
+| Transformer layers | 8 |
 | Hidden width | 256 |
 | Attention heads | 4 |
+| Key/value heads | 1 |
 | Feed-forward width | 1,024 |
-| Context length | 512 tokens |
+| Context length | 2,048 tokens |
 | Tokenizer vocabulary | 4,096 tokens |
 | Microbatch size | 16 sequences |
 | Gradient accumulation | 4 microbatches |
@@ -73,7 +74,7 @@ The first iterations include compilation time. Checkpoints store the original mo
 | Peak learning rate | 0.0003 |
 | Warmup | 200 optimizer steps |
 
-The model uses learned position embeddings, normalization before each sublayer, GELU activations, and causal attention.
+The model uses learned position embeddings, normalization before each sublayer, GELU activations, and causal grouped-query attention. Four query heads share one key/value head.
 Its output projection shares the token embedding weights.
 Training uses Muon for attention and feed-forward matrix weights.
 AdamW updates token embeddings, position embeddings, and normalization parameters, with no weight decay on normalization parameters.
@@ -103,6 +104,7 @@ Each evaluation writes:
 - `checkpoint.pt`: latest model, both optimizer states, random states, tokenizer, and training configuration.
 - `best.pt`: checkpoint with the lowest measured validation loss.
 - `metrics.csv`: training loss, validation loss, validation perplexity, learning rate, and sampled token count.
+- `curves.png`: training loss, validation perplexity, and learning-rate curves.
 - `summary.json`: latest metrics and model configuration.
 
 Perplexity is the exponential of the average next-token loss. Lower values indicate better next-token predictions.

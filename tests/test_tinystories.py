@@ -35,7 +35,23 @@ class TinyStoriesTests(unittest.TestCase):
     def test_default_parameter_budget(self):
         model = model_module.GPT()
         count = sum(p.numel() for p in model.parameters())
-        self.assertTrue(4_900_000 <= count <= 5_200_000, count)
+        self.assertTrue(6_600_000 <= count <= 6_700_000, count)
+
+    def test_grouped_query_attention_configuration(self):
+        config = model_module.GPTConfig(
+            vocab_size=16,
+            context_length=8,
+            n_layers=1,
+            n_heads=4,
+            n_kv_heads=2,
+            d_model=32,
+        )
+        block = model_module.Block(config)
+        self.assertEqual(block.qkv.out_features, 64)
+        logits, _ = model_module.GPT(config)(torch.ones((2, 8), dtype=torch.long))
+        self.assertEqual(logits.shape, (2, 8, 16))
+        with self.assertRaisesRegex(ValueError, "n_heads"):
+            model_module.GPTConfig(n_heads=4, n_kv_heads=3)
 
     def test_muon_routes_hidden_weights_and_adamw_routes_embeddings_and_norms(self):
         model = model_module.GPT(
@@ -188,6 +204,7 @@ class TinyStoriesTests(unittest.TestCase):
             )
             summary = json.loads((output / "summary.json").read_text())
             self.assertTrue(0 < summary["val_loss"] < 20)
+            self.assertTrue((output / "curves.png").is_file())
             text = run(
                 "generate.py",
                 "--checkpoint",

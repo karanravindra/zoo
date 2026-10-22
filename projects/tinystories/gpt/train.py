@@ -2,15 +2,19 @@ import argparse
 import csv
 import json
 import math
-import time
 from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import torch
 from model import GPT, GPTConfig
 
 from data import DATA_DIR, TokenData
+from zoo.progress import StepProgress
 
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 
@@ -80,6 +84,26 @@ def evaluate(model, data, batch_size, batches, device):
     return sum(losses) / len(losses)
 
 
+def plot_curves(history, output):
+    if not history:
+        return
+    steps = [row["step"] for row in history]
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    for ax, metric, title in zip(
+        axes,
+        (("train_loss", "val_loss"), ("val_perplexity",), ("lr",)),
+        ("Loss", "Validation perplexity", "Learning rate"),
+    ):
+        for name in metric:
+            ax.plot(steps, [row[name] for row in history], label=name.removeprefix("val_"))
+        ax.set(xlabel="Optimizer step", ylabel=title, title=title)
+        ax.grid(alpha=0.2)
+        ax.legend()
+    fig.tight_layout()
+    fig.savefig(output / "curves.png", dpi=150)
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Train a roughly 5M-parameter GPT on TinyStories"
@@ -89,7 +113,7 @@ def main():
     parser.add_argument("--steps", type=int, default=1_000)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--grad-accum", type=int, default=1)
-    parser.add_argument("--context-length", type=int, default=512)
+    parser.add_argument("--context-length", type=int, default=2048)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--warmup-steps", type=int, default=50)
     parser.add_argument("--weight-decay", type=float, default=0.1)
@@ -171,6 +195,19 @@ def main():
     )
     metrics_path = args.output_dir / "metrics.csv"
     append = args.resume is not None and metrics_path.exists()
+    history = []
+    if append:
+        with metrics_path.open(newline="") as file:
+            for row in csv.DictReader(file):
+                history.append(
+                    {
+                        "step": int(row["step"]),
+                        "train_loss": float(row["train_loss"]),
+                        "val_loss": float(row["val_loss"]),
+                        "val_perplexity": float(row["val_perplexity"]),
+                        "lr": float(row["lr"]),
+                    }
+                )
     with metrics_path.open("a" if append else "w", newline="") as file:
         writer = csv.DictWriter(
             file,
@@ -186,8 +223,8 @@ def main():
         if not append:
             writer.writeheader()
         model.train()
+        progress = StepProgress(start_step)
         for step in range(start_step + 1, args.steps + 1):
-            started = time.perf_counter()
             lr = learning_rate(
                 step, args.steps, min(args.warmup_steps, args.steps), args.lr
             )
@@ -208,11 +245,11 @@ def main():
             for optimizer in optimizers.values():
                 optimizer.step()
             tokens_seen += tokens_per_step
+            progress.complete(step)
             if step % args.log_every == 0 or step == 1:
-                elapsed = time.perf_counter() - started
                 print(
                     f"Step {step}/{args.steps}: loss={train_loss:.4f} lr={lr:.2e} "
-                    f"tokens/s={tokens_per_step / elapsed:,.0f}"
+                    f"{progress.status(step, args.steps)}"
                 )
             if step % args.eval_every == 0 or step == args.steps:
                 val_loss = evaluate(
@@ -231,6 +268,8 @@ def main():
                 }
                 writer.writerow(row)
                 file.flush()
+                history.append(row)
+                plot_curves(history, args.output_dir)
                 checkpoint = {
                     "model": model.state_dict(),
                     "optimizers": {

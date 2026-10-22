@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torchinfo import summary
 
 
 class ConvNeXtBlock(nn.Module):
@@ -39,3 +40,7 @@ class ConvNeXt(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.head(self.features(x).mean(dim=(-2, -1)))
+
+
+if __name__ == "__main__":
+    summary(ConvNeXt(), input_size=(1, 1, 28, 28))
