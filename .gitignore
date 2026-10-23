@@ -14,3 +14,4 @@ wheels/
 /projects/mnist/classify/outputs/
 /projects/cifar100/classify/outputs/
 /projects/tinystories/gpt/outputs/
+/projects/chat/pretrain/outputs/
