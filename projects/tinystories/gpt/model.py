@@ -15,6 +15,7 @@ class GPTConfig:
     n_heads: int = 4
     n_kv_heads: int = 1
     d_model: int = 256
+    m: int = int(256 * 2.5)
     dropout: float = 0.0
     rope_theta: float = 10_000.0
 
@@ -27,6 +28,7 @@ class GPTConfig:
                 self.n_heads,
                 self.n_kv_heads,
                 self.d_model,
+                self.m,
             )
             < 1
         ):
@@ -59,9 +61,9 @@ class Block(nn.Module):
         self.proj = nn.Linear(config.d_model, config.d_model, bias=False)
         self.mlp_norm = nn.LayerNorm(config.d_model)
         self.mlp = nn.Sequential(
-            nn.Linear(config.d_model, 4 * config.d_model, bias=False),
-            nn.GELU(),
-            nn.Linear(4 * config.d_model, config.d_model, bias=False),
+            nn.Linear(config.d_model, config.m, bias=False),
+            nn.GELU(approximate="tanh"),
+            nn.Linear(config.m, config.d_model, bias=False),
         )
         self.residual_dropout = nn.Dropout(config.dropout)
         frequencies = 1.0 / (

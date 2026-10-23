@@ -2479,6 +2479,7 @@ dependencies = [
 
 [package.optional-dependencies]
 tinystories = [
+    { name = "awkward" },
     { name = "datasets" },
     { name = "gigatoken" },
     { name = "numpy" },
@@ -2487,6 +2488,7 @@ tinystories = [
 
 [package.metadata]
 requires-dist = [
+    { name = "awkward", marker = "extra == 'tinystories'", specifier = ">=2.0" },
     { name = "datasets", marker = "extra == 'tinystories'", specifier = ">=3.0" },
     { name = "gigatoken", marker = "extra == 'tinystories'", specifier = ">=0.1.0" },
     { name = "lightning", specifier = ">=2.6.6" },

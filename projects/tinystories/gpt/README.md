@@ -17,7 +17,7 @@ uv sync --extra tinystories
 uv run --extra tinystories python projects/tinystories/gpt/prepare.py
 ```
 
-Preparation trains a 4,096-token byte-level BPE (byte pair encoding) tokenizer on the first 100,000 training stories. It uses Gigatoken by default to encode the corpus.
+Preparation trains an 8,192-token byte-level BPE (byte pair encoding) tokenizer on the first 100,000 training stories. Gigatoken both trains the tokenizer and encodes the corpus.
 It then streams the official training and validation splits into packed token files.
 Every story ends with `<|endoftext|>`. The tokenizer never trains on validation stories.
 Byte-level encoding can represent any UTF-8 text without an unknown-token fallback.

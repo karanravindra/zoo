@@ -3,9 +3,10 @@ import json
 from itertools import islice
 from pathlib import Path
 
+import awkward as ak
 import gigatoken as gt
 import numpy as np
-from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
+from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 from tqdm import tqdm
 
 from data import DATA_DIR, EOS
@@ -25,12 +26,34 @@ def stories(split, local_file=None, limit=None):
         )
 
 
+def byte_level_tokenizer(vocab, merges):
+    # Gigatoken trains on raw bytes; map them to the GPT-2 byte-level alphabet.
+    printable = [*range(33, 127), *range(161, 173), *range(174, 256)]
+    chars = dict(zip(printable, map(chr, printable)))
+    for byte in range(256):
+        chars.setdefault(byte, chr(256 + len(chars) - len(printable)))
+
+    def text(token):
+        return "".join(chars[byte] for byte in token)
+
+    tokenizer = Tokenizer(
+        models.BPE(
+            {text(token): id for id, token in vocab.items()},
+            [(text(left), text(right)) for left, right in merges],
+        )
+    )
+    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tokenizer.decoder = decoders.ByteLevel()
+    tokenizer.add_special_tokens([EOS])
+    return tokenizer
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Train a BPE tokenizer and pack TinyStories tokens"
     )
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
-    parser.add_argument("--vocab-size", type=int, default=4096)
+    parser.add_argument("--vocab-size", type=int, default=8192)
     parser.add_argument("--tokenizer-stories", type=int, default=100_000)
     parser.add_argument("--train-stories", type=int, default=None)
     parser.add_argument("--val-stories", type=int, default=None)
@@ -47,20 +70,12 @@ def main():
     args.data_dir.mkdir(parents=True, exist_ok=True)
     metadata_path = args.data_dir / "metadata.json"
     metadata_path.unlink(missing_ok=True)
-    tokenizer = Tokenizer(models.BPE())
-    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
-    tokenizer.decoder = decoders.ByteLevel()
-    trainer = trainers.BpeTrainer(
-        vocab_size=args.vocab_size,
-        special_tokens=[EOS],
-        initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
-    )
     tokenizer_limit = min(
         args.tokenizer_stories, args.train_stories or args.tokenizer_stories
     )
-    tokenizer.train_from_iterator(
-        stories("train", args.train_file, tokenizer_limit), trainer
-    )
+    corpus = EOS.join(stories("train", args.train_file, tokenizer_limit))
+    vocab, merges = gt.train_bpe(corpus.encode(), args.vocab_size, [EOS])
+    tokenizer = byte_level_tokenizer(vocab, merges)
     tokenizer.save(str(args.data_dir / "tokenizer.json"))
     eos_id = tokenizer.token_to_id(EOS)
     vocab_size = tokenizer.get_vocab_size()
@@ -77,7 +92,7 @@ def main():
                 stories(split, local_file, limit), desc=split, unit=" stories"
             ):
                 buffer.append(story)
-                if len(buffer) == 1000:
+                if len(buffer) == 20_000:
                     count += write_batch(file, tokenizer, buffer, eos_id)
                     story_count += len(buffer)
                     buffer.clear()
@@ -99,11 +114,13 @@ def main():
 
 
 def write_batch(file, tokenizer, stories_batch, eos_id):
-    tokens = []
-    for encoding in tokenizer.encode_batch(stories_batch):
-        tokens.extend(encoding)
-        tokens.append(eos_id)
-    np.asarray(tokens, dtype=np.uint16).tofile(file)
+    if not stories_batch:
+        return 0
+    # Gigatoken returns awkward arrays; flatten in bulk, never iterate per token.
+    encoded = tokenizer.encode_batch(stories_batch)
+    eos = ak.Array(np.full((len(stories_batch), 1), eos_id))
+    tokens = ak.to_numpy(ak.flatten(ak.concatenate([encoded, eos], axis=1)))
+    tokens.astype(np.uint16).tofile(file)
     return len(tokens)
 
 
