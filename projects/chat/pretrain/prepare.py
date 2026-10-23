@@ -6,6 +6,7 @@ from pathlib import Path
 import awkward as ak
 import gigatoken as gt
 import numpy as np
+from english import CHECKS
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 from tqdm import tqdm
 
@@ -47,6 +48,7 @@ FORMATS = {
 }
 
 # weight is the share of characters (a proxy for tokens) drawn from each source.
+# `english` names the language check in english.py that every document must pass.
 # Sources without a validation split hold out their first `holdout` rows from train.
 SOURCES = [
     {
@@ -57,6 +59,7 @@ SOURCES = [
         "val_split": None,
         "holdout": 10_000,
         "format": "text",
+        "english": "prose",
         "weight": 0.55,
     },
     {
@@ -66,6 +69,7 @@ SOURCES = [
         "train_split": "train",
         "val_split": "test",
         "format": "smoltalk",
+        "english": "chat",
         "weight": 0.15,
     },
     {
@@ -76,6 +80,7 @@ SOURCES = [
         "val_split": None,
         "holdout": 2_000,
         "format": "glaive",
+        "english": "chat",
         "weight": 0.10,
     },
     {
@@ -86,6 +91,7 @@ SOURCES = [
         "val_split": None,
         "holdout": 2_000,
         "format": "content",
+        "english": "code",
         "weight": 0.08,
     },
     {
@@ -96,6 +102,7 @@ SOURCES = [
         "val_split": None,
         "holdout": 2_000,
         "format": "text",
+        "english": "prose",
         "weight": 0.07,
     },
     {
@@ -106,6 +113,7 @@ SOURCES = [
         "val_split": None,
         "holdout": 2_000,
         "format": "text",
+        "english": "prose",
         "weight": 0.05,
     },
 ]
@@ -130,9 +138,10 @@ def source_documents(source, split, seed):
         else:
             dataset = dataset.skip(holdout).shuffle(seed=seed, buffer_size=10_000)
     render = FORMATS[source["format"]]
+    is_english = CHECKS[source["english"]]
     for row in dataset:
         text = render(row)
-        if text and text.strip():
+        if text and text.strip() and is_english(text):
             yield text
 
 

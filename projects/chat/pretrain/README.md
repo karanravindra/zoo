@@ -19,6 +19,11 @@ Code and JSON take slightly more tokens per character than prose, so their real 
 
 Chat and tool data are rendered as `<|role|>\n{text}<|end|>\n` turns.
 The tokenizer reserves `<|endoftext|>`, `<|end|>`, `<|system|>`, `<|user|>`, `<|assistant|>` and `<|tool|>`, so SFT does not need to resize embeddings.
+Every document must pass an English check (`english.py`) with a dependency-free heuristic:
+- All sources reject documents that are mostly non-Latin script (CJK, Cyrillic, Arabic, ...).
+- Prose sources also reject Latin-script foreign text by its rate of English function words. On a sample this drops 88-100% of Wikipedia in 12 other languages and 0.2-2.5% of English.
+- Code files are checked for script, and for language only when they carry plenty of comment prose. About 7% of English code files are dropped.
+
 Sources with no validation split hold out their first rows (`holdout` in `SOURCES`) from train.
 
 ## Setup
