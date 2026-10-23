@@ -46,7 +46,6 @@ def main():
     )
     output = tokenizer.decode(result[0].tolist()).decode()
     print(output)
-    print(repr(output))
 
 
 if __name__ == "__main__":

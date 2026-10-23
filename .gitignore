@@ -15,3 +15,5 @@ wheels/
 /projects/cifar100/classify/outputs/
 /projects/tinystories/gpt/outputs/
 /projects/chat/pretrain/outputs/
+
+.torchinductor/

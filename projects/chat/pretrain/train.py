@@ -2,9 +2,15 @@ import argparse
 import csv
 import json
 import math
+import os
 from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
+
+# Keep Inductor's compile cache on disk next to the project; /tmp is often wiped.
+os.environ.setdefault(
+    "TORCHINDUCTOR_CACHE_DIR", str(Path(__file__).parent / ".torchinductor")
+)
 
 import matplotlib
 
@@ -17,6 +23,11 @@ from data import DATA_DIR, TokenData
 from zoo.progress import StepProgress
 
 OUTPUT_DIR = Path(__file__).parent / "outputs"
+MOE_DEFAULTS = {
+    name: value
+    for name, value in asdict(GPTConfig()).items()
+    if name.startswith(("moe", "n_routed", "n_shared"))
+}
 
 
 def choose_device(name):
@@ -127,12 +138,32 @@ def main():
     parser.add_argument("--warmup-steps", type=int, default=50)
     parser.add_argument("--weight-decay", type=float, default=0.1)
     parser.add_argument("--dropout", type=float, default=0.0)
+    parser.add_argument(
+        "--moe", action="store_true", help="use DeepSeek-V3 style MoE MLPs"
+    )
+    parser.add_argument(
+        "--bias-update-rate",
+        type=float,
+        default=1e-3,
+        help="MoE aux-loss-free router bias step size",
+    )
     parser.add_argument("--eval-every", type=int, default=250)
     parser.add_argument("--eval-batches", type=int, default=20)
     parser.add_argument("--log-every", type=int, default=10)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument(
+        "--compile-mode",
+        default="default",
+        choices=(
+            "default",
+            "reduce-overhead",
+            "max-autotune",
+            "max-autotune-no-cudagraphs",
+        ),
+        help="torch.compile mode; CUDA-graph modes cannot capture MoE grouped GEMM",
+    )
     parser.add_argument("--resume", type=Path)
     args = parser.parse_args()
     for name in (
@@ -151,6 +182,8 @@ def main():
         parser.error("Require lr > 0, weight-decay >= 0, warmup-steps >= 0")
     if not 0 <= args.dropout < 1:
         parser.error("dropout must be in [0, 1)")
+    if args.bias_update_rate < 0:
+        parser.error("bias-update-rate must be non-negative")
     torch.manual_seed(args.seed)
     torch.set_num_threads(args.threads)
     device = choose_device(args.device)
@@ -160,6 +193,7 @@ def main():
         vocab_size=data.metadata["vocab_size"],
         context_length=args.context_length,
         dropout=args.dropout,
+        moe=args.moe,
     )
     model = GPT(config).to(device)
     optimizers = make_optimizers(model, args.lr, args.weight_decay)
@@ -167,7 +201,8 @@ def main():
     start_step, tokens_seen, best_loss = 0, 0, float("inf")
     if args.resume:
         checkpoint = torch.load(args.resume, map_location="cpu", weights_only=True)
-        if checkpoint["config"] != asdict(config):
+        # Checkpoints from before MoE support are dense with the default MoE fields.
+        if {**MOE_DEFAULTS, **checkpoint["config"]} != asdict(config):
             parser.error(
                 "Checkpoint model configuration does not match training arguments"
             )
@@ -195,7 +230,13 @@ def main():
         tokens_seen = checkpoint["tokens_seen"]
     if start_step >= args.steps:
         parser.error("steps must exceed the checkpoint step")
-    compiled_model = torch.compile(model, mode="reduce-overhead")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    # Portable bundle of compiled artifacts; reused by later runs with the same setup.
+    cache_path = args.output_dir / f"compile_cache_{args.compile_mode}.bin"
+    cache_saved = cache_path.exists()
+    if cache_saved:
+        torch.compiler.load_cache_artifacts(cache_path.read_bytes())
+    compiled_model = torch.compile(model, mode=args.compile_mode)
     initialize_gradients(model)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     parameters = sum(p.numel() for p in model.parameters())
@@ -254,6 +295,8 @@ def main():
             )
             for optimizer in optimizers.values():
                 optimizer.step()
+            if config.moe:
+                model.update_router_bias(args.bias_update_rate)
             tokens_seen += tokens_per_step
             progress.complete(step)
             if step % args.log_every == 0 or step == 1:
@@ -265,6 +308,12 @@ def main():
                 val_loss = evaluate(
                     compiled_model, data, args.batch_size, args.eval_batches, device
                 )
+                if not cache_saved:
+                    # Train and eval graphs are both compiled by the first evaluation.
+                    artifacts = torch.compiler.save_cache_artifacts()
+                    if artifacts is not None:
+                        cache_path.write_bytes(artifacts[0])
+                    cache_saved = True
                 perplexity = math.exp(min(val_loss, 80))
                 improved = val_loss < best_loss
                 best_loss = min(best_loss, val_loss)

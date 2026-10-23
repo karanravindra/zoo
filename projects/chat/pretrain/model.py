@@ -18,6 +18,14 @@ class GPTConfig:
     m: int = int(256 * 2.5)
     dropout: float = 0.0
     rope_theta: float = 10_000.0
+    # DeepSeek-V3 style mixture of experts; the defaults match the dense MLP's
+    # active width: (n_shared_experts + moe_top_k) * moe_m == m.
+    moe: bool = False
+    n_routed_experts: int = 16
+    n_shared_experts: int = 1
+    moe_top_k: int = 3
+    moe_m: int = 160
+    moe_routed_scale: float = 1.0
 
     def __post_init__(self):
         if (
@@ -43,6 +51,119 @@ class GPTConfig:
             raise ValueError("dropout must be in [0, 1)")
         if self.rope_theta <= 0:
             raise ValueError("rope_theta must be positive")
+        if self.moe:
+            if min(self.n_routed_experts, self.moe_top_k, self.moe_m) < 1:
+                raise ValueError("MoE sizes must be positive")
+            if self.n_shared_experts < 0 or self.moe_routed_scale <= 0:
+                raise ValueError("Require n_shared_experts >= 0, moe_routed_scale > 0")
+            if self.moe_top_k > self.n_routed_experts:
+                raise ValueError("moe_top_k must not exceed n_routed_experts")
+
+
+class PermuteRows(torch.autograd.Function):
+    """Row gather by a permutation whose backward is the inverse gather.
+
+    Plain indexing would backpropagate through an atomic scatter-add, which is
+    much slower than a second gather when the indices are a permutation.
+    """
+
+    @staticmethod
+    def forward(ctx, x, order, inverse):
+        ctx.save_for_backward(inverse, order)
+        return x[order]
+
+    @staticmethod
+    def backward(ctx, grad):
+        inverse, order = ctx.saved_tensors
+        return grad[inverse], None, None
+
+
+class MoE(nn.Module):
+    """DeepSeek-V3 MoE: shared experts plus sigmoid-routed fine-grained experts.
+
+    Load balancing is auxiliary-loss-free: a per-expert bias steers top-k selection
+    only (not the gate weights) and is nudged by `update_bias` after each step.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.n_experts = config.n_routed_experts
+        self.top_k = config.moe_top_k
+        self.routed_scale = config.moe_routed_scale
+        self.router = nn.Linear(config.d_model, self.n_experts, bias=False)
+        self.up = nn.Parameter(torch.empty(self.n_experts, config.d_model, config.moe_m))
+        self.down = nn.Parameter(
+            torch.empty(self.n_experts, config.moe_m, config.d_model)
+        )
+        shared_m = config.n_shared_experts * config.moe_m
+        self.shared = (
+            nn.Sequential(
+                nn.Linear(config.d_model, shared_m, bias=False),
+                nn.GELU(approximate="tanh"),
+                nn.Linear(shared_m, config.d_model, bias=False),
+            )
+            if shared_m
+            else None
+        )
+        self.register_buffer("bias", torch.zeros(self.n_experts))
+        self.register_buffer("load", torch.zeros(self.n_experts), persistent=False)
+
+    def output_weights(self):
+        return (self.down, *([self.shared[2].weight] if self.shared else []))
+
+    @torch.no_grad()
+    def update_bias(self, rate):
+        # Raise the bias of underloaded experts and lower it for overloaded ones.
+        self.bias += rate * (self.load.mean() - self.load).sign()
+        self.load.zero_()
+
+    @staticmethod
+    def grouped_mm(x, weight, counts, dtype):
+        x, weight = x.to(dtype), weight.to(dtype)
+        if x.is_cuda:
+            return torch._grouped_mm(x, weight, offs=counts.cumsum(0).to(torch.int32))
+        # Reference path for devices without grouped GEMM support.
+        chunks = x.split(counts.tolist())
+        return torch.cat([c @ w for c, w in zip(chunks, weight)])
+
+    def forward(self, x):
+        shape = x.shape
+        x = x.reshape(-1, shape[-1])
+        scores = torch.sigmoid(F.linear(x.float(), self.router.weight.float()))
+        _, chosen = (scores + self.bias).topk(self.top_k, dim=-1)
+        gates = scores.gather(1, chosen)
+        gates = gates / gates.sum(dim=-1, keepdim=True) * self.routed_scale
+        flat = chosen.reshape(-1)
+        counts = torch.zeros(
+            self.n_experts, dtype=torch.long, device=x.device
+        ).scatter_add_(0, flat, torch.ones_like(flat))
+        if self.training:
+            self.load += counts
+        # Sort token-expert pairs by expert so each expert sees a contiguous block.
+        order = flat.argsort(stable=True)
+        inverse = order.argsort()
+        dtype = (
+            torch.get_autocast_dtype(x.device.type)
+            if torch.is_autocast_enabled(x.device.type)
+            else x.dtype
+        )
+        # Row i of the repeated input is token i // top_k's copy for expert flat[i].
+        repeated = x.to(dtype).repeat_interleave(self.top_k, dim=0)
+        hidden = F.gelu(
+            self.grouped_mm(
+                PermuteRows.apply(repeated, order, inverse), self.up, counts, dtype
+            ),
+            approximate="tanh",
+        )
+        out = PermuteRows.apply(
+            self.grouped_mm(hidden, self.down, counts, dtype), inverse, order
+        )
+        y = (out.view(-1, self.top_k, out.size(-1)) * gates.unsqueeze(-1).to(dtype)).sum(
+            dim=1
+        )
+        if self.shared is not None:
+            y = y + self.shared(x).to(y.dtype)
+        return y.view(shape)
 
 
 class Block(nn.Module):
@@ -60,10 +181,14 @@ class Block(nn.Module):
         )
         self.proj = nn.Linear(config.d_model, config.d_model, bias=False)
         self.mlp_norm = nn.LayerNorm(config.d_model)
-        self.mlp = nn.Sequential(
-            nn.Linear(config.d_model, config.m, bias=False),
-            nn.GELU(approximate="tanh"),
-            nn.Linear(config.m, config.d_model, bias=False),
+        self.mlp = (
+            MoE(config)
+            if config.moe
+            else nn.Sequential(
+                nn.Linear(config.d_model, config.m, bias=False),
+                nn.GELU(approximate="tanh"),
+                nn.Linear(config.m, config.d_model, bias=False),
+            )
         )
         self.residual_dropout = nn.Dropout(config.dropout)
         frequencies = 1.0 / (
@@ -119,13 +244,25 @@ class GPT(nn.Module):
         self.norm = nn.LayerNorm(config.d_model)
         self.apply(self._init_weights)
         for block in self.blocks:
-            for weight in (block.proj.weight, block.mlp[2].weight):
+            output_weights = (
+                block.mlp.output_weights() if config.moe else (block.mlp[2].weight,)
+            )
+            for weight in (block.proj.weight, *output_weights):
                 nn.init.normal_(weight, std=0.02 / math.sqrt(2 * config.n_layers))
 
     @staticmethod
     def _init_weights(module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
             nn.init.normal_(module.weight, std=0.02)
+        elif isinstance(module, MoE):
+            nn.init.normal_(module.up, std=0.02)
+            nn.init.normal_(module.down, std=0.02)
+
+    def update_router_bias(self, rate=1e-3):
+        """Apply the aux-loss-free balancing update; call once per optimizer step."""
+        for block in self.blocks:
+            if isinstance(block.mlp, MoE):
+                block.mlp.update_bias(rate)
 
     def forward(self, tokens, targets=None):
         length = tokens.size(1)
