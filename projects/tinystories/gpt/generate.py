@@ -44,7 +44,9 @@ def main():
         args.top_k,
         checkpoint["data"]["eos_id"],
     )
-    print(tokenizer.decode(result[0].tolist()).decode())
+    output = tokenizer.decode(result[0].tolist()).decode()
+    print(output)
+    print(repr(output))
 
 
 if __name__ == "__main__":

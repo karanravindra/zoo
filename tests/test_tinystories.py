@@ -92,6 +92,27 @@ class TinyStoriesTests(unittest.TestCase):
                     group["weight_decay"], 0.0 if parameter.ndim < 2 else 0.1
                 )
 
+    def test_initialize_gradients_allocates_zeroed_stable_buffers(self):
+        model = model_module.GPT(
+            model_module.GPTConfig(
+                vocab_size=16,
+                context_length=8,
+                n_layers=1,
+                n_heads=2,
+                d_model=32,
+            )
+        )
+        training.initialize_gradients(model)
+        for parameter in model.parameters():
+            self.assertIsNotNone(parameter.grad)
+            torch.testing.assert_close(parameter.grad, torch.zeros_like(parameter))
+        gradient_ids = [id(parameter.grad) for parameter in model.parameters()]
+        for optimizer in training.make_optimizers(model, 3e-4, 0.1).values():
+            optimizer.zero_grad(set_to_none=False)
+        self.assertEqual(
+            gradient_ids, [id(parameter.grad) for parameter in model.parameters()]
+        )
+
     def test_attention_is_causal_and_model_learns(self):
         torch.manual_seed(7)
         config = model_module.GPTConfig(

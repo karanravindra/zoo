@@ -69,6 +69,13 @@ def make_optimizers(model, lr, weight_decay):
     }
 
 
+def initialize_gradients(model):
+    """Allocate stable gradient buffers before CUDA graph capture."""
+    for parameter in model.parameters():
+        if parameter.requires_grad:
+            parameter.grad = torch.zeros_like(parameter)
+
+
 @torch.inference_mode()
 def evaluate(model, data, batch_size, batches, device):
     model.eval()
@@ -112,7 +119,7 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument("--steps", type=int, default=1_000)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--grad-accum", type=int, default=1)
+    parser.add_argument("--grad-accum", type=int, default=4)
     parser.add_argument("--context-length", type=int, default=2048)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--warmup-steps", type=int, default=50)
@@ -187,6 +194,7 @@ def main():
     if start_step >= args.steps:
         parser.error("steps must exceed the checkpoint step")
     compiled_model = torch.compile(model, mode="reduce-overhead")
+    initialize_gradients(model)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     parameters = sum(p.numel() for p in model.parameters())
     tokens_per_step = args.batch_size * args.grad_accum * args.context_length
@@ -231,7 +239,7 @@ def main():
             for optimizer in optimizers.values():
                 for group in optimizer.param_groups:
                     group["lr"] = lr
-                optimizer.zero_grad(set_to_none=True)
+                optimizer.zero_grad(set_to_none=False)
             train_loss = 0.0
             for _ in range(args.grad_accum):
                 x, y = data.batch("train", args.batch_size, generator, device)

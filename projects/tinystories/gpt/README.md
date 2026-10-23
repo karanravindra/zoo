@@ -137,6 +137,29 @@ Use `--top-k 0` to sample from the full vocabulary.
 Generation stops at the end-of-story token or the token limit.
 When text exceeds the context length, the model uses the most recent context window.
 
+## Evaluate generations
+
+Score a generated story with the local System One endpoint and its `laya` model:
+
+```bash
+uv run --extra tinystories python projects/tinystories/gpt/evaluate.py \
+  --instruction "Write a short story about a fox who finds a key." \
+  --story "Once upon a time, a little fox found a key."
+```
+
+The command writes a JSON object of the five 1-5 scores to standard output. The
+endpoint defaults to `http://localhost:11434/v1/systemone`; override it with
+`--endpoint` if needed.
+
+For a batch, pass a JSONL file with one `instruction` and `story` object per line:
+
+```bash
+uv run --extra tinystories python projects/tinystories/gpt/evaluate.py \
+  --input generations.jsonl > scored-generations.jsonl
+```
+
+Each output line preserves the input object and adds its `scores` object.
+
 ## Verify
 
 ```bash
