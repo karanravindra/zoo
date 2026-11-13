@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Latent Explorer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&display=swap" rel="stylesheet" />
+    <style>
+      /* Light table + contact sheet: the plot is the table you scan, the panel is the sheet
+         of frames you pulled, and tags are grease-pencil marks in --marker. */
+      :root {
+        color-scheme: light;
+        --table: #e4e8eb;       /* plot background */
+        --sheet: #fafbfb;       /* panels */
+        --well: #eef1f3;        /* insets: inputs, thumbnails */
+        --rule: #cbd2d8;
+        --ink: #161b20;
+        --graphite: #59626b;
+        --faint: #87909a;
+        --marker: #c21a4b;      /* lasso, tags, primary action */
+        --marker-ink: #ffffff;
+        --point-muted: #bfc6cc;
+        --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+        --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --table: #101316;
+          --sheet: #181c20;
+          --well: #20252a;
+          --rule: #2e353c;
+          --ink: #e9edf0;
+          --graphite: #a9b2ba;
+          --faint: #77818a;
+          --marker: #f2577d;
+          --marker-ink: #1a0910;
+          --point-muted: #3a4249;
+          --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+          --s5: #d55181; --s6: #22a022; --s7: #9085e9; --s8: #e66767;
+        }
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        background: var(--table);
+        color: var(--ink);
+        font-family: "Archivo", ui-sans-serif, system-ui, sans-serif;
+        font-size: 13px; line-height: 1.45;
+        font-variation-settings: "wdth" 88;
+        font-variant-numeric: tabular-nums;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 460px;
+        grid-template-rows: auto minmax(0, 1fr);
+        height: 100vh;
+        overflow: hidden;
+      }
+      :focus-visible { outline: 2px solid var(--marker); outline-offset: 2px; }
+      [hidden] { display: none !important; }
+
+      /* --- header ---------------------------------------------------------- */
+      header {
+        grid-column: 1 / -1;
+        display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+        padding: 10px 16px;
+        background: var(--sheet);
+        border-bottom: 1px solid var(--rule);
+      }
+      .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+      .brand h1 {
+        margin: 0; font-size: 17px; line-height: 1; font-weight: 750;
+        font-variation-settings: "wdth" 125; letter-spacing: -0.01em;
+      }
+      .brand .meta { color: var(--graphite); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .brand .meta b { color: var(--ink); font-weight: 600; }
+      .controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+      .spacer { flex: 1; }
+
+      label.ctl { display: flex; gap: 6px; align-items: center; color: var(--graphite); }
+      select, input, button { font: inherit; font-variation-settings: inherit; color: var(--ink); }
+      select, input {
+        background: var(--well); border: 1px solid var(--rule); border-radius: 5px;
+        padding: 4px 8px; min-height: 28px;
+      }
+      select { padding-right: 4px; }
+      input::placeholder { color: var(--faint); }
+      button {
+        background: var(--sheet); border: 1px solid var(--rule); border-radius: 5px;
+        padding: 4px 10px; min-height: 28px; cursor: pointer;
+      }
+      button:hover:not(:disabled) { border-color: var(--graphite); }
+      button:disabled, input:disabled { opacity: 0.5; cursor: not-allowed; }
+      button.primary { background: var(--marker); border-color: var(--marker); color: var(--marker-ink); font-weight: 600; }
+      button.primary:hover:not(:disabled) { filter: brightness(1.08); border-color: var(--marker); }
+      button.quiet { background: none; border-color: transparent; color: var(--graphite); }
+      button.quiet:hover:not(:disabled) { color: var(--ink); border-color: var(--rule); }
+
+      /* --- plot ------------------------------------------------------------ */
+      #plot { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+      #canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+      #plot[data-tool="lasso"] #canvas, #plot.shift #canvas { cursor: crosshair; }
+      #plot.dragging #canvas { cursor: grabbing; }
+
+      .float {
+        position: absolute;
+        background: color-mix(in srgb, var(--sheet) 94%, transparent);
+        backdrop-filter: blur(6px);
+        border: 1px solid var(--rule); border-radius: 8px;
+      }
+      #legend { top: 12px; left: 12px; max-height: calc(100% - 80px); overflow: auto; padding: 4px; min-width: 168px; }
+      #legend .row {
+        display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center;
+        width: 100%; padding: 3px 8px; border: none; border-radius: 4px; min-height: 0;
+        background: none; color: var(--graphite); text-align: left;
+      }
+      #legend .row:hover, #legend .row:focus-visible { background: var(--well); color: var(--ink); }
+      #legend .sw { width: 10px; height: 10px; border-radius: 50%; }
+      #legend .n { color: var(--faint); }
+
+      #tools {
+        bottom: 12px; left: 12px; display: flex; align-items: center; gap: 2px; padding: 3px;
+      }
+      #tools button { border-color: transparent; background: none; min-width: 30px; padding: 4px 8px; color: var(--graphite); }
+      #tools button:hover { color: var(--ink); border-color: var(--rule); }
+      #tools button[aria-pressed="true"] { background: var(--ink); color: var(--sheet); border-color: var(--ink); }
+      #tools .sep { width: 1px; align-self: stretch; margin: 4px 4px; background: var(--rule); }
+      #tools svg { display: block; width: 16px; height: 16px; }
+      #tools .tool { display: flex; align-items: center; gap: 6px; }
+
+      #keys {
+        bottom: 56px; left: 12px; padding: 10px 14px; width: 270px;
+        color: var(--graphite);
+      }
+      #keys dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
+      #keys dt { color: var(--ink); font-weight: 600; white-space: nowrap; }
+      #keys dd { margin: 0; }
+      kbd {
+        font: inherit; font-size: 11px; font-weight: 600;
+        padding: 0 4px; border: 1px solid var(--rule); border-bottom-width: 2px; border-radius: 3px;
+        background: var(--well); color: var(--ink);
+      }
+
+      #tooltip {
+        position: absolute; pointer-events: none; display: none; z-index: 2;
+        width: 184px; padding: 5px; background: var(--sheet);
+        border: 1px solid var(--rule); border-radius: 6px;
+        box-shadow: 0 8px 24px -8px rgb(10 20 30 / 0.35);
+      }
+      #tooltip img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 3px; display: block; background: var(--well); }
+      #tooltip .info { padding: 5px 3px 1px; font-size: 12px; color: var(--graphite); overflow-wrap: anywhere; }
+      #tooltip .info .name { color: var(--ink); font-weight: 600; }
+      #tooltip .info .tagged { color: var(--marker); font-weight: 600; }
+
+      /* --- sheet (right panel) --------------------------------------------- */
+      aside {
+        background: var(--sheet); border-left: 1px solid var(--rule);
+        display: flex; flex-direction: column; min-height: 0;
+      }
+      aside section { padding: 14px 16px; border-bottom: 1px solid var(--rule); }
+      .sel-head { display: flex; align-items: baseline; gap: 6px 10px; flex-wrap: wrap; }
+      .sel-head h2 { margin: 0; font-size: 15px; font-weight: 700; font-variation-settings: "wdth" 100; }
+      .sel-head .count { font-size: 15px; font-weight: 400; color: var(--graphite); }
+      .sel-head .spacer { flex: 1; }
+      .empty { color: var(--graphite); margin: 6px 0 0; max-width: 46ch; }
+
+      .comp { margin-top: 12px; display: grid; gap: 10px; }
+      .comp .label { display: flex; justify-content: space-between; color: var(--graphite); font-size: 12px; margin-bottom: 4px; }
+      .bar { display: flex; height: 8px; border-radius: 2px; overflow: hidden; background: var(--well); gap: 1px; }
+      .bar span { display: block; min-width: 2px; }
+      .key { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 5px; font-size: 12px; color: var(--graphite); }
+      .key span { display: inline-flex; align-items: center; gap: 5px; }
+      .key i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+      .key b { color: var(--ink); font-weight: 600; }
+
+      #tag-form { display: flex; gap: 6px; margin-top: 14px; }
+      #tag-input { flex: 1; min-width: 0; }
+      .status { font-size: 12px; color: var(--faint); margin-top: 6px; min-height: 1.45em; }
+      .status.error { color: var(--marker); }
+
+      .tags-section h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--graphite); }
+      #tag-list { display: flex; gap: 4px; flex-wrap: wrap; max-height: 92px; overflow: auto; }
+      .chip {
+        display: inline-flex; gap: 6px; align-items: baseline;
+        min-height: 0; padding: 2px 9px; border-radius: 999px; font-size: 12px;
+        background: var(--well); border: 1px solid transparent; color: var(--ink);
+      }
+      .chip .n { color: var(--faint); }
+      .chip:hover:not(:disabled) { border-color: var(--marker); }
+      .chip[aria-pressed="true"] { background: var(--marker); color: var(--marker-ink); }
+      .chip[aria-pressed="true"] .n { color: inherit; opacity: 0.75; }
+
+      .grid-wrap { flex: 1; overflow: auto; padding: 14px 16px 16px; background: var(--well); }
+      .grid-wrap:not(:has(.cell)) { background: none; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(98px, 1fr)); gap: 10px 8px; }
+      .cell { position: relative; outline: none; }
+      .cell .frame {
+        position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 3px; background: var(--table);
+        box-shadow: 0 0 0 1px var(--rule);
+      }
+      .cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .cell:hover .frame, .cell:focus-visible .frame, .cell.active .frame { box-shadow: 0 0 0 2px var(--ink); }
+      .cell .cap {
+        display: flex; gap: 6px; align-items: baseline; padding-top: 3px;
+        font-size: 11px; line-height: 1.3; white-space: nowrap; overflow: hidden;
+      }
+      .cell .id { color: var(--faint); flex: none; }
+      .cell .t { color: var(--marker); font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+      .cell .x {
+        position: absolute; top: 4px; right: 4px; opacity: 0;
+        min-height: 0; padding: 0 6px; font-size: 13px; line-height: 20px;
+        border: none; border-radius: 3px; background: rgb(10 14 18 / 0.7); color: #fff;
+      }
+      .cell:hover .x, .cell:focus-within .x { opacity: 1; }
+      .more { margin-top: 14px; width: 100%; }
+      .cell .r { color: var(--faint); text-decoration: line-through; overflow: hidden; text-overflow: ellipsis; }
+
+      /* --- panes: selection / review --------------------------------------- */
+      .pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+      .tabs { display: flex; gap: 2px; padding: 8px 16px 0; border-bottom: 1px solid var(--rule); }
+      .tabs button {
+        border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none;
+        color: var(--graphite); font-weight: 600; padding: 6px 10px;
+      }
+      .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--marker); }
+      #review-meta p { margin: 8px 0 0; color: var(--graphite); }
+      #review-meta b { color: var(--ink); font-weight: 600; }
+      #review-meta .warn { color: var(--marker); }
+      #review-meta .hint { font-size: 12px; color: var(--faint); }
+      #review-meta code, .empty code {
+        font-size: 11px; background: var(--well); padding: 0 3px; border-radius: 3px; overflow-wrap: anywhere;
+      }
+      .review-actions { display: flex; gap: 6px; margin-top: 10px; }
+      .review-head { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; }
+      .review-head h3 { margin: 0; font-size: 13px; font-weight: 700; }
+      .review-head h3 span { color: var(--faint); font-weight: 400; margin-left: 4px; }
+      .review-head .spacer { flex: 1; }
+      .review-head p { margin: 0; font-size: 12px; color: var(--faint); }
+      #uncertain-head { margin-top: 22px; }
+      .cell .score {
+        position: absolute; left: 4px; bottom: 4px; padding: 0 4px; border-radius: 3px;
+        font-size: 11px; font-weight: 600; background: rgb(10 14 18 / 0.7); color: #fff;
+      }
+      .cell .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin-top: 3px; }
+      .cell .acts button { min-height: 0; padding: 1px 0; font-size: 11px; }
+      .cell .acts .yes[aria-pressed="true"] { background: var(--marker); border-color: var(--marker); color: var(--marker-ink); }
+      .cell .acts .no[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--sheet); }
+      .cell.done .frame { opacity: 0.45; }
+
+      @media (max-width: 960px) {
+        body { grid-template-columns: 1fr; grid-template-rows: auto 60vh auto; overflow: auto; height: auto; }
+        aside { border-left: none; border-top: 1px solid var(--rule); }
+        .grid-wrap { flex: none; max-height: none; }
+        .brand .meta { white-space: normal; }
+        .brand { flex-wrap: wrap; row-gap: 4px; }
+        .brand h1 { white-space: nowrap; }
+        #legend { max-height: 45%; }
+      }
+      @media (max-width: 520px) {
+        header { padding: 10px 16px; gap: 10px; }
+        .controls { gap: 8px 12px; }
+        aside section, .grid-wrap { padding-left: 16px; padding-right: 16px; }
+        #legend { min-width: 0; max-width: calc(100% - 24px); }
+        #keys { width: calc(100% - 24px); }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <h1>Latent Explorer</h1>
+        <span class="meta" id="meta"></span>
+      </div>
+      <span class="spacer"></span>
+      <div class="controls">
+        <label class="ctl">View <select id="projection"></select></label>
+        <label class="ctl" id="k-ctl">Clusters <select id="k"></select></label>
+        <label class="ctl">Color by <select id="color-by"></select></label>
+        <button id="export" class="quiet" title="Download every image with its class, cluster and tags">Export CSV</button>
+      </div>
+    </header>
+
+    <div id="plot" data-tool="pan">
+      <canvas id="canvas" aria-label="Embedding scatter plot"></canvas>
+      <div id="legend" class="float" aria-label="Groups"></div>
+
+      <div id="tools" class="float" role="toolbar" aria-label="Plot tools">
+        <button class="tool" data-tool="pan" aria-pressed="true" title="Pan and click to select (V)">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5v13M1.5 8h13M8 1.5 6.2 3.3M8 1.5l1.8 1.8M8 14.5l-1.8-1.8M8 14.5l1.8-1.8M1.5 8l1.8-1.8M1.5 8l1.8 1.8M14.5 8l-1.8-1.8M14.5 8l-1.8 1.8"/></svg>
+          Pan
+        </button>
+        <button class="tool" data-tool="lasso" aria-pressed="false" title="Draw around points to select them (L, or hold Shift)">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 11.5C2.3 10.6 1.5 9.2 1.5 7.6c0-3 3-5.1 6.6-5.1s6.4 2 6.4 4.6c0 2.9-3.2 4.6-6.6 4.6-1.2 0-2.3-.2-3.4-.6Z" stroke-dasharray="2 1.6"/><path d="M4.5 11.5c-.4 1.4.3 2.6 1.6 3"/></svg>
+          Lasso
+        </button>
+        <span class="sep"></span>
+        <button id="zoom-in" title="Zoom in (+)" aria-label="Zoom in">+</button>
+        <button id="zoom-out" title="Zoom out (−)" aria-label="Zoom out">−</button>
+        <button id="fit" title="Fit all points (0, or double-click the plot)">Fit</button>
+        <span class="sep"></span>
+        <button id="keys-btn" aria-expanded="false" aria-controls="keys" title="Keyboard and mouse shortcuts (?)">?</button>
+      </div>
+
+      <div id="keys" class="float" hidden>
+        <dl>
+          <dt>Scroll</dt><dd>Zoom around the cursor</dd>
+          <dt>Drag</dt><dd>Pan, or lasso with the lasso tool</dd>
+          <dt><kbd>Shift</kbd> drag</dt><dd>Lasso from any tool</dd>
+          <dt>Click</dt><dd>Select a point</dd>
+          <dt><kbd>⌘</kbd> / <kbd>Ctrl</kbd></dt><dd>Add to the selection instead of replacing it</dd>
+          <dt><kbd>V</kbd> <kbd>L</kbd></dt><dd>Pan tool, lasso tool</dd>
+          <dt><kbd>0</kbd></dt><dd>Fit all points</dd>
+          <dt><kbd>T</kbd></dt><dd>Type a tag for the selection</dd>
+          <dt><kbd>Z</kbd></dt><dd>Undo the last tag edit</dd>
+          <dt><kbd>Y</kbd> <kbd>N</kbd></dt><dd>In review: yes / no for the focused image</dd>
+          <dt><kbd>Delete</kbd></dt><dd>Drop the focused image from the selection</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Clear the selection</dd>
+        </dl>
+      </div>
+
+      <div id="tooltip"><img alt="" /><div class="info"></div></div>
+    </div>
+
+    <aside>
+      <nav class="tabs" role="tablist" aria-label="Panel">
+        <button id="tab-select" role="tab" aria-selected="true" aria-controls="select-pane">Selection</button>
+        <button id="tab-review" role="tab" aria-selected="false" aria-controls="review-pane" title="Accept or reject the tags autotag.py suggests">Review suggestions</button>
+      </nav>
+
+      <div id="select-pane" class="pane" role="tabpanel">
+        <section>
+          <div class="sel-head">
+            <h2>Selection</h2>
+            <span class="count" id="sel-count"></span>
+            <span class="spacer"></span>
+            <label class="ctl" id="sort-ctl">Sort <select id="sort"></select></label>
+            <button id="clear" class="quiet">Clear</button>
+          </div>
+          <div id="composition"></div>
+
+          <form id="tag-form" autocomplete="off">
+            <input id="tag-input" list="tag-options" aria-label="Tag name" />
+            <datalist id="tag-options"></datalist>
+            <button class="primary" type="submit" id="tag-add">Tag</button>
+            <button type="button" id="untag">Untag</button>
+            <button type="button" id="reject" title="Mark the selected images as NOT having this tag (negative examples for autotag.py)">Reject</button>
+          </form>
+          <div id="status" class="status" role="status"></div>
+        </section>
+
+        <section class="tags-section">
+          <h3 id="tags-title">Tags</h3>
+          <div id="tag-list"></div>
+        </section>
+
+        <div id="grid-wrap" class="grid-wrap">
+          <div id="grid" class="grid"></div>
+          <button id="more" class="more" hidden>Show more</button>
+        </div>
+      </div>
+
+      <div id="review-pane" class="pane" role="tabpanel" hidden>
+        <section>
+          <div class="sel-head">
+            <h2>Review</h2>
+            <span class="spacer"></span>
+            <label class="ctl">Tag <select id="review-tag"></select></label>
+          </div>
+          <div id="review-meta"></div>
+          <div class="review-actions">
+            <button id="review-color" class="quiet" title="Color the plot by this tag's suggested score">Show scores on plot</button>
+            <button id="review-refresh" class="quiet" title="Rebuild the lists, dropping images you've answered">Refresh lists</button>
+          </div>
+          <div id="review-status" class="status" role="status"></div>
+        </section>
+
+        <div id="review-lists" class="grid-wrap">
+          <div class="review-head">
+            <h3>Likely<span id="likely-count"></span></h3>
+            <span class="spacer"></span>
+            <button id="accept-all" class="primary" title="Tag every image shown below that you haven't answered">Accept all shown</button>
+          </div>
+          <p id="likely-empty" class="empty">Nothing unreviewed at or above the threshold.</p>
+          <div id="likely" class="grid"></div>
+          <button id="likely-more" class="more" hidden>Show more</button>
+
+          <div class="review-head" id="uncertain-head">
+            <h3>Uncertain<span id="uncertain-count"></span></h3>
+            <span class="spacer"></span>
+            <p>closest to 0.5 first</p>
+          </div>
+          <p id="uncertain-empty" class="empty">No unreviewed images below the threshold.</p>
+          <div id="uncertain" class="grid"></div>
+          <button id="uncertain-more" class="more" hidden>Show more</button>
+        </div>
+      </div>
+    </aside>
+
+    <script type="module" src="./app.ts"></script>
+  </body>
+</html>
