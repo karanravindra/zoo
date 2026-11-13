@@ -1,0 +1,22 @@
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# OS
+.DS_Store
