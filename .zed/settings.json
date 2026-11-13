@@ -1,0 +1,25 @@
+{
+  // Overrides Zed's default list, so the defaults are repeated here.
+  "file_scan_exclusions": [
+    "**/.git",
+    "**/.svn",
+    "**/.hg",
+    "**/.jj",
+    "**/CVS",
+    "**/.DS_Store",
+    "**/Thumbs.db",
+    "**/.classpath",
+    "**/.settings",
+
+    "**/__pycache__",
+    "**/*.py[cod]",
+    "**/*.egg-info",
+    "build",
+    "dist",
+    ".venv",
+    "**/.ipynb_checkpoints",
+    "**/.pytest_cache",
+    "**/.ruff_cache",
+    "**/.mypy_cache"
+  ]
+}
