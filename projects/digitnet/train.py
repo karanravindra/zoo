@@ -128,7 +128,7 @@ def main(cfg: Config = Config()):
 
     model = build_model(cfg).to(device)
     c, h, w = getattr(data, cfg.dataset).image_shape
-    summary(model, input_size=(cfg.batch_size, c, h, w), device=device)
+    summary(model, input_size=(cfg.batch_size, c, h, w), device=device, depth=2)
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=cfg.lr, total_steps=cfg.epochs * len(train_dl))
