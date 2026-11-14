@@ -47,12 +47,14 @@ def evaluate(model, dl, device) -> dict[str, float]:
     n_img = n_px = 0
     for x, _ in dl:
         x = x.to(device, non_blocking=True)
+        # Finish with each output before the next model call: with --compile (CUDA graphs) a call overwrites the
+        # previous call's output buffer.
         recon = model(x)
         se += F.mse_loss(recon, x, reduction="sum")
-        se_global += F.mse_loss(model(x, 1.0), x, reduction="sum")
         recon = recon.clamp(-1, 1)
         psnr_sum += psnr(recon, x).sum()
         ssim_sum += ssim(recon, x).sum()
+        se_global += F.mse_loss(model(x, 1.0), x, reduction="sum")
         n_img += len(x)
         n_px += x.numel()
     return {"mse": se.item() / n_px, "mse_global": se_global.item() / n_px, "psnr": psnr_sum.item() / n_img, "ssim": ssim_sum.item() / n_img}
