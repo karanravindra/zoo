@@ -130,6 +130,8 @@ def main(cfg: LDMConfig):
         depth=2,
     )
     ema = deepcopy(model).eval().requires_grad_(False)
+    if cfg.compile:
+        model.compile(mode="reduce-overhead", dynamic=False)  # in place, so state_dict keys and checkpoints are unchanged
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     steps_per_epoch = len(z_train) // cfg.batch_size

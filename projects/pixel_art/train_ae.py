@@ -73,6 +73,8 @@ def main(cfg: AEConfig):
 
     model = build_ae(cfg).to(device)
     summary(model, input_size=(cfg.batch_size, CHANNELS, IMAGE_SIZE, IMAGE_SIZE), device=device, depth=2)
+    if cfg.compile:
+        model.compile(mode="reduce-overhead", dynamic=False)  # in place, so state_dict keys and checkpoints are unchanged
 
     steps_per_epoch = len(d.train_idx) // cfg.batch_size
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)

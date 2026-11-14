@@ -123,6 +123,7 @@ class Args:
     batch_size: int = 32
     num_workers: int = 2
     data_root: Path = DATA_ROOT
+    compile: bool = False  # torch.compile the model with mode="reduce-overhead" (CUDA graphs on GPU)
 
 
 def main() -> None:
@@ -140,6 +141,8 @@ def main() -> None:
     device = get_device()
     print(f"Loading {args.model} on {device}")
     model = AutoModel.from_pretrained(args.model).eval().to(device)
+    if args.compile:
+        model.compile(mode="reduce-overhead", dynamic=False)
     transform = make_transform(args.model, args.image_size)
     for split_dir, out_path in todo:
         embed_split(model, split_dir, out_path, device, transform, args.batch_size, args.num_workers)
