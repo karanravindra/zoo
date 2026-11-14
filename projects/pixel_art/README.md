@@ -16,6 +16,7 @@ Run from anywhere with `uv run`. Every run writes to `<repo>/runs/pixel_art/<sta
 | `stats.py` | Dataset statistics (subjects, captions, alpha, colors, duplicates) to `runs/pixel_art/stats/`. |
 | `pixel_data.py` | Builds the cache in `data/cache/PixelArtAtlas/` (uint8 RGBA, token ids, vocab). Run once: `uv run --with pyarrow projects/pixel_art/pixel_data.py`. |
 | `train_ae.py` | Stage 1. Trains the first-stage autoencoder. Writes `best.pt`, `last.pt`, `results.json` (test MSE/PSNR/SSIM), curves and `recon.png`. |
+| `compare_ae.py` | Plots AE runs side by side, labelled by the config values that differ. |
 | `train_ldm.py` | Stage 2. Trains the latent diffusion model (denoiser + text encoder) on frozen-AE latents. Uses `LDMConfig.ae_ckpt`, or the latest AE run's `best.pt` if it is `None`. Writes `best.pt`, `last.pt`, `results.json` and per-epoch sample grids (real sprite, then 4 samples, per validation caption). |
 | `sample.py` | Draws sprites for `--prompt` captions from an ldm checkpoint (default: latest ldm run's `last.pt`); `--guidance` sets the classifier-free guidance scale. |
 
