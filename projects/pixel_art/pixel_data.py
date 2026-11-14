@@ -14,7 +14,6 @@ Writes <repo>/data/cache/PixelArtAtlas/:
 
 from __future__ import annotations
 
-import argparse
 import io
 import json
 import os
@@ -37,7 +36,7 @@ CHANNELS = 4  # RGBA
 PAD_ID, NULL_ID, UNK_ID = 0, 1, 2  # NULL is the "empty caption" used for classifier-free guidance
 SPECIALS = ["<pad>", "<null>", "<unk>"]
 WORD = re.compile(r"[a-z0-9']+")
-
+import tyro
 
 # --- tokenizer -------------------------------------------------------------------
 
@@ -193,11 +192,14 @@ def prepare(max_len: int = 24, min_count: int = 5, workers: int = 4, force: bool
     print(f"Wrote {CACHE_ROOT}")
 
 
+@dataclass
+class Args:
+    max_len: int = 24  # tokens per caption (longer ones are cut)
+    min_count: int = 5  # words rarer than this in train become <unk>
+    workers: int = 4
+    force: bool = False
+
+
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("--max-len", type=int, default=24, help="tokens per caption (longer ones are cut)")
-    p.add_argument("--min-count", type=int, default=5, help="words rarer than this in train become <unk>")
-    p.add_argument("--workers", type=int, default=4)
-    p.add_argument("--force", action="store_true")
-    a = p.parse_args()
+    a = tyro.cli(Args, description=__doc__)
     prepare(a.max_len, a.min_count, a.workers, a.force)

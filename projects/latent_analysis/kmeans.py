@@ -17,11 +17,12 @@ every split to the most cosine-similar centroid. Outputs go to <repo>/runs/laten
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import matplotlib
 
@@ -29,11 +30,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
+import tyro
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from embed import DATA_ROOT, DEFAULT_MODEL, REPO_ROOT, latent_dir, load_embeddings  # noqa: E402
 from emeans import EMeans  # noqa: E402
+
 from zoo.data import stargan  # noqa: E402
 from zoo.utils.device import seed_everything  # noqa: E402
 
@@ -160,19 +163,22 @@ def plot_clusters(x: torch.Tensor, centroids: torch.Tensor, paths: list[str], pa
     plt.close(fig)
 
 
+@dataclass
+class Args:
+    dataset: Literal[tuple(stargan.ALL)] = "afhq_v2"
+    model: str = DEFAULT_MODEL  # Hugging Face model id
+    image_size: int = 256
+    k: int = 32
+    method: Literal["emeans", "spherical"] = "emeans"
+    n_init: int = 5  # restarts; the lowest-inertia one is kept
+    epochs: int = 5  # e-means passes over the data
+    seed: int = 0
+    data_root: Path = DATA_ROOT
+    runs_root: Path = RUNS_ROOT
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--dataset", choices=stargan.ALL, default="afhq_v2")
-    p.add_argument("--model", default=DEFAULT_MODEL, help="Hugging Face model id")
-    p.add_argument("--image-size", type=int, default=256)
-    p.add_argument("--k", type=int, default=32)
-    p.add_argument("--method", choices=["emeans", "spherical"], default="emeans")
-    p.add_argument("--n-init", type=int, default=5, help="restarts; the lowest-inertia one is kept")
-    p.add_argument("--epochs", type=int, default=5, help="e-means passes over the data")
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--data-root", type=Path, default=DATA_ROOT)
-    p.add_argument("--runs-root", type=Path, default=RUNS_ROOT)
-    args = p.parse_args()
+    args = tyro.cli(Args, description=__doc__)
 
     seed_everything(args.seed)
     src = latent_dir(args.dataset, args.model, args.image_size, args.data_root)

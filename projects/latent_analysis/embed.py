@@ -19,11 +19,13 @@ concatenates them for the other scripts.
 
 from __future__ import annotations
 
-import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import torch
+import tyro
 from torch.utils.data import DataLoader
 from torchvision import datasets
 from torchvision.transforms import v2
@@ -113,15 +115,18 @@ def embed_split(
     print(f"wrote {out_path} {tuple(result['features'].shape)}")
 
 
+@dataclass
+class Args:
+    dataset: Literal[tuple(stargan.ALL)] = "afhq_v2"
+    model: str = DEFAULT_MODEL  # Hugging Face model id
+    image_size: int = 256
+    batch_size: int = 32
+    num_workers: int = 2
+    data_root: Path = DATA_ROOT
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--dataset", choices=stargan.ALL, default="afhq_v2")
-    p.add_argument("--model", default=DEFAULT_MODEL, help="Hugging Face model id")
-    p.add_argument("--image-size", type=int, default=256)
-    p.add_argument("--batch-size", type=int, default=32)
-    p.add_argument("--num-workers", type=int, default=2)
-    p.add_argument("--data-root", type=Path, default=DATA_ROOT)
-    args = p.parse_args()
+    args = tyro.cli(Args, description=__doc__)
 
     todo: list[tuple[Path, Path]] = []  # (split dir, output file)
     for name in stargan.members(args.dataset):

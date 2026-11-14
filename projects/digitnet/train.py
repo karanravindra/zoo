@@ -25,12 +25,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
+import tyro
 from torch.utils.data import DataLoader, random_split
 from torchinfo import summary
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from digitnet import Config, build_model, load_checkpoint, save_checkpoint  # noqa: E402
+
 from zoo import data  # noqa: E402
 from zoo.utils.device import get_device, seed_everything  # noqa: E402
 
@@ -112,7 +114,7 @@ def make_loaders(cfg: Config, device: torch.device):
     return train_dl, val_dl, test_dl
 
 
-def main(cfg: Config = Config()):
+def main(cfg: Config):
     seed_everything(cfg.seed, deterministic=cfg.deterministic)
     device = get_device()
     print(f"Using device: {device}")
@@ -211,4 +213,4 @@ def main(cfg: Config = Config()):
 
 
 if __name__ == "__main__":
-    main()
+    main(tyro.cli(Config, description=__doc__))

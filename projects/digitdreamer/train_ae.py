@@ -21,6 +21,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+import tyro
 from torch.utils.data import DataLoader
 from torchinfo import summary
 from torchvision.utils import save_image
@@ -28,6 +29,7 @@ from torchvision.utils import save_image
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import make_splits, new_run_dir, plot_curves, psnr, ssim, to_unit  # noqa: E402
 from dreamer import IMAGE_SIZE, AEConfig, build_ae, load_ae, save_ae  # noqa: E402
+
 from zoo import data  # noqa: E402
 from zoo.utils.device import get_device, seed_everything  # noqa: E402
 
@@ -63,7 +65,7 @@ def save_recon(model, ds, device, path: Path, n: int = 16) -> None:
     save_image(to_unit(torch.cat([x, model(x).clamp(-1, 1)])), path, nrow=n, padding=1)
 
 
-def main(cfg: AEConfig = AEConfig()):
+def main(cfg: AEConfig):
     seed_everything(cfg.seed, deterministic=cfg.deterministic)
     device = get_device()
     print(f"Using device: {device}")
@@ -171,4 +173,4 @@ def main(cfg: AEConfig = AEConfig()):
 
 
 if __name__ == "__main__":
-    main()
+    main(tyro.cli(AEConfig, description=__doc__))
