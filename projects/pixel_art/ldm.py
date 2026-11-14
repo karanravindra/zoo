@@ -57,6 +57,7 @@ class AEConfig(_Serializable):
     # runtime
     seed: int = 0
     deterministic: bool = True
+    compile: bool = False  # torch.compile the model with mode="reduce-overhead" (CUDA graphs on GPU)
     log_every: int = 200
 
     @property
@@ -88,6 +89,7 @@ class LDMConfig(_Serializable):
     # runtime
     seed: int = 0
     deterministic: bool = True
+    compile: bool = False  # torch.compile the model with mode="reduce-overhead" (CUDA graphs on GPU)
     log_every: int = 200
 
 

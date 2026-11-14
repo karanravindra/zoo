@@ -90,6 +90,8 @@ def main(cfg: AEConfig):
     c = getattr(data, cfg.dataset).image_shape[0]
     h = w = IMAGE_SIZE
     summary(model, input_size=(cfg.batch_size, c, h, w), device=device, depth=2)
+    if cfg.compile:
+        model.compile(mode="reduce-overhead", dynamic=False)  # in place, so state_dict keys and checkpoints are unchanged
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=cfg.lr, total_steps=cfg.epochs * len(train_dl))

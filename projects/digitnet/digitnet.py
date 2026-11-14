@@ -26,6 +26,7 @@ class Config:
     # runtime
     seed: int = 0
     deterministic: bool = True
+    compile: bool = False  # torch.compile the model with mode="reduce-overhead" (CUDA graphs on GPU)
     num_workers: int = 4
     log_every: int = 20  # steps between progress-bar loss updates (each forces a device sync)
 
