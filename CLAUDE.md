@@ -17,6 +17,7 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
 
 - Every runnable script builds its settings from a dataclass and parses them with [tyro](https://brentyi.github.io/tyro/), so the dataclass fields define the CLI flags. Don't use argparse.
 - Pattern: `main(tyro.cli(Config))`. Defaults live in the dataclass, and a field's trailing comment is its `--help` text.
+- Every script that runs a model has a `compile: bool = False` field. When it's set, call `model.compile(mode="reduce-overhead", dynamic=False)` in place (not `torch.compile(model)`, which adds `_orig_mod.` to the checkpoint keys), after `torchinfo.summary` and after any EMA `deepcopy`. Keep `dynamic=False`: with dynamic shapes, Python floats become float64 graph inputs, which crash Inductor on MPS and slow it down even when they don't. Varying shapes and float values just trigger recompiles instead.
 - Training configs are saved into checkpoints, so they should stay plain, serializable dataclasses.
 
 ## Run outputs
