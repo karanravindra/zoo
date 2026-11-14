@@ -38,7 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = REPO_ROOT / "data"
 RUNS_ROOT = REPO_ROOT / "runs" / "digitnet"
 
-METRIC_FIELDS = ["epoch", "lr", "train_loss", "train_acc", "val_loss", "val_acc", "epoch_time_s"]
+METRIC_FIELDS = ["epoch", "lr", "train_loss", "train_acc", "val_loss", "val_acc", "steps_per_s", "epoch_time_s"]
 
 
 @torch.no_grad()
@@ -141,6 +141,7 @@ def main(cfg: Config = Config()):
 
         for epoch in range(1, cfg.epochs + 1):
             t0 = time.perf_counter()
+            t_log, n_log = t0, 0  # window for the rolling steps/s
             lr = sched.get_last_lr()[0]
             model.train()
             # Accumulate on device; only sync with .item() every `log_every` steps.
@@ -161,8 +162,14 @@ def main(cfg: Config = Config()):
                 correct += (logits.detach().argmax(1) == y).sum()
                 seen += len(y)
                 if step % cfg.log_every == 0:
-                    pbar.set_postfix(loss=f"{loss_sum.item() / seen:.4f}")
+                    mean_loss = loss_sum.item() / seen  # syncs the device, so the timing below is real
+                    now = time.perf_counter()
+                    steps_per_s_now = (step - n_log) / (now - t_log)
+                    t_log, n_log = now, step
+                    pbar.set_postfix(loss=f"{mean_loss:.4f}", steps_per_s=f"{steps_per_s_now:.1f}")
 
+            loss_sum.item()  # sync the device so the timing below covers all training work
+            steps_per_s = len(train_dl) / (time.perf_counter() - t0)
             val_loss, val_acc = evaluate(model, val_dl, device)
             row = {
                 "epoch": epoch,
@@ -171,6 +178,7 @@ def main(cfg: Config = Config()):
                 "train_acc": correct.item() / seen,
                 "val_loss": val_loss,
                 "val_acc": val_acc,
+                "steps_per_s": steps_per_s,
                 "epoch_time_s": time.perf_counter() - t0,
             }
             rows.append(row)
@@ -178,7 +186,7 @@ def main(cfg: Config = Config()):
             f.flush()
             print(
                 f"epoch {epoch}: train_loss={row['train_loss']:.4f} train_acc={row['train_acc']:.4f} "
-                f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} ({row['epoch_time_s']:.1f}s)"
+                f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} ({row['steps_per_s']:.1f} steps/s, {row['epoch_time_s']:.1f}s)"
             )
 
             if val_acc > best_val_acc:
