@@ -31,7 +31,7 @@ from dreamer import IMAGE_SIZE, AEConfig, build_ae, load_ae, save_ae  # noqa: E4
 from zoo import data  # noqa: E402
 from zoo.utils.device import get_device, seed_everything  # noqa: E402
 
-METRIC_FIELDS = ["epoch", "lr", "train_mse", "val_mse", "val_mse_global", "val_psnr", "val_ssim", "epoch_time_s"]
+METRIC_FIELDS = ["epoch", "lr", "train_mse", "val_mse", "val_mse_global", "val_psnr", "val_ssim", "steps_per_s", "epoch_time_s"]
 
 
 @torch.no_grad()
@@ -100,6 +100,7 @@ def main(cfg: AEConfig = AEConfig()):
 
         for epoch in range(1, cfg.epochs + 1):
             t0 = time.perf_counter()
+            t_log, n_log = t0, 0  # window for the rolling steps/s
             lr = sched.get_last_lr()[0]
             model.train()
             loss_sum = torch.zeros((), device=device)
@@ -115,8 +116,14 @@ def main(cfg: AEConfig = AEConfig()):
                 loss_sum += loss.detach() * len(x)
                 seen += len(x)
                 if step % cfg.log_every == 0:
-                    print(f"epoch {epoch}/{cfg.epochs} step {step}/{len(train_dl)}: train_mse={loss_sum.item() / seen:.5f}")
+                    mean_loss = loss_sum.item() / seen  # syncs the device, so the timing below is real
+                    now = time.perf_counter()
+                    steps_per_s_now = (step - n_log) / (now - t_log)
+                    t_log, n_log = now, step
+                    print(f"epoch {epoch}/{cfg.epochs} step {step}/{len(train_dl)}: train_mse={mean_loss:.5f} ({steps_per_s_now:.1f} steps/s)")
 
+            loss_sum.item()  # sync the device so the timing below covers all training work
+            steps_per_s = len(train_dl) / (time.perf_counter() - t0)
             val = evaluate(model, val_dl, device)
             val_mse = val["mse"]
             row = {
@@ -127,6 +134,7 @@ def main(cfg: AEConfig = AEConfig()):
                 "val_mse_global": val["mse_global"],
                 "val_psnr": val["psnr"],
                 "val_ssim": val["ssim"],
+                "steps_per_s": steps_per_s,
                 "epoch_time_s": time.perf_counter() - t0,
             }
             rows.append(row)
@@ -134,7 +142,7 @@ def main(cfg: AEConfig = AEConfig()):
             f.flush()
             print(
                 f"epoch {epoch}: train_mse={row['train_mse']:.5f} val_mse={val_mse:.5f} val_mse_global={val['mse_global']:.5f} "
-                f"val_psnr={val['psnr']:.2f}dB val_ssim={val['ssim']:.4f} ({row['epoch_time_s']:.1f}s)"
+                f"val_psnr={val['psnr']:.2f}dB val_ssim={val['ssim']:.4f} ({row['steps_per_s']:.1f} steps/s, {row['epoch_time_s']:.1f}s)"
             )
 
             if val_mse < best_val:

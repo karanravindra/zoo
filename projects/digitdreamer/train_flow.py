@@ -44,7 +44,7 @@ from dreamer import (  # noqa: E402
 from zoo import data  # noqa: E402
 from zoo.utils.device import get_device, seed_everything  # noqa: E402
 
-METRIC_FIELDS = ["epoch", "lr", "train_loss", "val_loss", "epoch_time_s"]
+METRIC_FIELDS = ["epoch", "lr", "train_loss", "val_loss", "steps_per_s", "epoch_time_s"]
 SAMPLES_PER_CLASS = 10
 
 
@@ -139,6 +139,7 @@ def main(cfg: FlowConfig = FlowConfig()):
 
         for epoch in range(1, cfg.epochs + 1):
             t0 = time.perf_counter()
+            t_log, n_log = t0, 0  # window for the rolling steps/s
             lr = sched.get_last_lr()[0]
             model.train()
             perm = torch.randperm(len(z_train), device=device, generator=gen)
@@ -161,20 +162,27 @@ def main(cfg: FlowConfig = FlowConfig()):
                 loss_sum += loss.detach() * len(y)
                 seen += len(y)
                 if (step + 1) % cfg.log_every == 0:
-                    print(f"epoch {epoch}/{cfg.epochs} step {step + 1}/{steps_per_epoch}: train_loss={loss_sum.item() / seen:.4f}")
+                    mean_loss = loss_sum.item() / seen  # syncs the device, so the timing below is real
+                    now = time.perf_counter()
+                    steps_per_s_now = (step + 1 - n_log) / (now - t_log)
+                    t_log, n_log = now, step + 1
+                    print(f"epoch {epoch}/{cfg.epochs} step {step + 1}/{steps_per_epoch}: train_loss={mean_loss:.4f} ({steps_per_s_now:.1f} steps/s)")
 
+            loss_sum.item()  # sync the device so the timing below covers all training work
+            steps_per_s = steps_per_epoch / (time.perf_counter() - t0)
             val_loss = eval_loss(ema, z_val, y_val, cfg.batch_size)
             row = {
                 "epoch": epoch,
                 "lr": lr,
                 "train_loss": loss_sum.item() / seen,
                 "val_loss": val_loss,
+                "steps_per_s": steps_per_s,
                 "epoch_time_s": time.perf_counter() - t0,
             }
             rows.append(row)
             writer.writerow(row)
             f.flush()
-            print(f"epoch {epoch}: train_loss={row['train_loss']:.4f} val_loss={val_loss:.4f} ({row['epoch_time_s']:.1f}s)")
+            print(f"epoch {epoch}: train_loss={row['train_loss']:.4f} val_loss={val_loss:.4f} ({row['steps_per_s']:.1f} steps/s, {row['epoch_time_s']:.1f}s)")
             save_samples(dreamer, num_classes, device, run_dir / "samples" / f"epoch_{epoch:03d}.png")
             if val_loss < best_val:
                 best_val, best_epoch = val_loss, epoch
