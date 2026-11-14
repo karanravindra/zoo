@@ -4,7 +4,7 @@ Run from anywhere (after building the cache with pixel_data.py): `uv run project
 
 Each run gets its own directory, `<repo>/runs/pixel_art/ae/<timestamp>/`, containing:
   config.json    the full config plus git commit and device
-  metrics.csv    one row per epoch
+  metrics.csv    one row per epoch (train_loss is the objective; *_mse/psnr/ssim are on decoded images)
   best.pt        checkpoint with the lowest validation MSE (includes its config)
   last.pt        checkpoint from the final epoch
   results.json   test-set (official validation split) MSE, PSNR and SSIM of best.pt
@@ -31,12 +31,12 @@ from pixel_data import CHANNELS, IMAGE_SIZE, load_data, to_pm1  # noqa: E402
 
 from zoo.utils.device import get_device, seed_everything  # noqa: E402
 
-METRIC_FIELDS = ["epoch", "lr", "train_mse", "train_psnr", "val_mse", "val_mse_global", "val_psnr", "val_ssim", "steps_per_s", "epoch_time_s"]
+METRIC_FIELDS = ["epoch", "lr", "train_loss", "train_mse", "train_psnr", "val_mse", "val_mse_global", "val_psnr", "val_ssim", "grad_norm", "grad_norm_max", "clip_frac", "steps_per_s", "epoch_time_s"]
 
 
 @torch.no_grad()
 def evaluate(model, images: torch.Tensor, idx: torch.Tensor | None, batch_size: int) -> dict[str, float]:
-    """MSE (per value), and PSNR / SSIM (mean over images) of clamped reconstructions.
+    """MSE (per value), and PSNR / SSIM (mean over images) of decoded reconstructions (`model.to_image`).
 
     `idx` selects rows of `images` (None = all). `mse_global` masks the detail channels."""
     model.eval()
@@ -46,12 +46,13 @@ def evaluate(model, images: torch.Tensor, idx: torch.Tensor | None, batch_size: 
     for i in range(0, n, batch_size):
         sel = slice(i, i + batch_size) if idx is None else idx[i : i + batch_size]
         x = to_pm1(images[sel])
-        recon = model(x)
+        # Finish with each output before the next model call: with --compile (CUDA graphs) a call overwrites the
+        # previous call's output buffer.
+        recon = model.to_image(model(x))
         se += F.mse_loss(recon, x, reduction="sum")
-        se_global += F.mse_loss(model(x, 1.0), x, reduction="sum")
-        recon = recon.clamp(-1, 1)
         psnr_sum += psnr(recon, x).sum()
         ssim_sum += ssim(recon, x).sum()
+        se_global += F.mse_loss(model.to_image(model(x, 1.0)), x, reduction="sum")
     return {"mse": se.item() / (n * CHANNELS * IMAGE_SIZE**2), "mse_global": se_global.item() / (n * CHANNELS * IMAGE_SIZE**2), "psnr": psnr_sum.item() / n, "ssim": ssim_sum.item() / n}
 
 
@@ -59,7 +60,7 @@ def evaluate(model, images: torch.Tensor, idx: torch.Tensor | None, batch_size: 
 def save_recon(model, images: torch.Tensor, path: Path, n: int = 16) -> None:
     model.eval()
     x = to_pm1(images[:n])
-    save_grid(torch.cat([x, model(x).clamp(-1, 1)]), path, nrow=n)
+    save_grid(torch.cat([x, model.to_image(model(x))]), path, nrow=n)
 
 
 def main(cfg: AEConfig):
@@ -94,26 +95,37 @@ def main(cfg: AEConfig):
             model.train()
             perm = d.train_idx[torch.randperm(len(d.train_idx), device=device, generator=gen)]
             loss_sum = torch.zeros((), device=device)
+            mse_sum = torch.zeros((), device=device)
             psnr_sum = torch.zeros((), device=device)
+            gn_sum, gn_max, n_clip = (torch.zeros((), device=device) for _ in range(3))  # pre-clip global grad norm
             seen = 0
             for step in range(steps_per_epoch):
                 x = to_pm1(d.images[perm[step * cfg.batch_size : (step + 1) * cfg.batch_size]])
+                if cfg.hflip_prob > 0:
+                    flip = torch.rand(len(x), device=device, generator=gen) < cfg.hflip_prob
+                    x = torch.where(flip[:, None, None, None], x.flip(-1), x)
                 recon = model(x, cfg.mask_prob)
-                loss = F.mse_loss(recon, x)
+                loss = model.loss(recon, x, cfg.alpha_weight)
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
+                gn = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip if cfg.grad_clip > 0 else float("inf"))
+                gn_sum += gn
+                gn_max = torch.maximum(gn_max, gn)
+                n_clip += (gn > cfg.grad_clip) if cfg.grad_clip > 0 else 0
                 opt.step()
                 sched.step()
 
                 loss_sum += loss.detach() * len(x)
-                psnr_sum += psnr(recon.detach().clamp(-1, 1), x).sum()
+                img = model.to_image(recon.detach())
+                mse_sum += F.mse_loss(img, x, reduction="sum") / x[0].numel()
+                psnr_sum += psnr(img, x).sum()
                 seen += len(x)
                 if (step + 1) % cfg.log_every == 0:
                     mean_loss = loss_sum.item() / seen  # syncs the device, so the timing below is real
                     now = time.perf_counter()
                     steps_per_s_now = (step + 1 - n_log) / (now - t_log)
                     t_log, n_log = now, step + 1
-                    print(f"epoch {epoch}/{cfg.epochs} step {step + 1}/{steps_per_epoch}: train_mse={mean_loss:.5f} train_psnr={psnr_sum.item() / seen:.2f}dB ({steps_per_s_now:.1f} steps/s)")
+                    print(f"epoch {epoch}/{cfg.epochs} step {step + 1}/{steps_per_epoch}: train_loss={mean_loss:.5f} train_mse={mse_sum.item() / seen:.5f} train_psnr={psnr_sum.item() / seen:.2f}dB grad_norm={gn_sum.item() / (step + 1):.3f} (max {gn_max.item():.2f}) ({steps_per_s_now:.1f} steps/s)")
 
             loss_sum.item()  # sync the device so the timing below covers all training work
             steps_per_s = steps_per_epoch / (time.perf_counter() - t0)
@@ -122,12 +134,16 @@ def main(cfg: AEConfig):
             row = {
                 "epoch": epoch,
                 "lr": lr,
-                "train_mse": loss_sum.item() / seen,
+                "train_loss": loss_sum.item() / seen,
+                "train_mse": mse_sum.item() / seen,
                 "train_psnr": psnr_sum.item() / seen,
                 "val_mse": val_mse,
                 "val_mse_global": val["mse_global"],
                 "val_psnr": val["psnr"],
                 "val_ssim": val["ssim"],
+                "grad_norm": gn_sum.item() / steps_per_epoch,
+                "grad_norm_max": gn_max.item(),
+                "clip_frac": n_clip.item() / steps_per_epoch,
                 "steps_per_s": steps_per_s,
                 "epoch_time_s": time.perf_counter() - t0,
             }
@@ -135,8 +151,8 @@ def main(cfg: AEConfig):
             writer.writerow(row)
             f.flush()
             print(
-                f"epoch {epoch}: train_mse={row['train_mse']:.5f} train_psnr={row['train_psnr']:.2f}dB val_mse={val_mse:.5f} val_mse_global={val['mse_global']:.5f} "
-                f"val_psnr={val['psnr']:.2f}dB val_ssim={val['ssim']:.4f} ({row['steps_per_s']:.1f} steps/s, {row['epoch_time_s']:.1f}s)"
+                f"epoch {epoch}: train_loss={row['train_loss']:.5f} train_mse={row['train_mse']:.5f} train_psnr={row['train_psnr']:.2f}dB val_mse={val_mse:.5f} val_mse_global={val['mse_global']:.5f} "
+                f"val_psnr={val['psnr']:.2f}dB val_ssim={val['ssim']:.4f} grad_norm={row['grad_norm']:.3f} (max {row['grad_norm_max']:.2f}, clipped {row['clip_frac']:.0%}) ({row['steps_per_s']:.1f} steps/s, {row['epoch_time_s']:.1f}s)"
             )
 
             if val_mse < best_val:
@@ -144,7 +160,7 @@ def main(cfg: AEConfig):
                 save_ae(run_dir / "best.pt", model, cfg, epoch, row)
 
     save_ae(run_dir / "last.pt", model, cfg, cfg.epochs, rows[-1])
-    plot_curves(rows, ["train_mse", "val_mse", "val_mse_global"], run_dir / "curves.png", ylabel="MSE", log=True)
+    plot_curves(rows, ["train_loss", "train_mse", "val_mse", "val_mse_global"], run_dir / "curves.png", ylabel="loss / MSE", log=True)
     plot_curves(rows, ["train_psnr", "val_psnr"], run_dir / "psnr.png", ylabel="PSNR (dB)")
     plot_curves(rows, ["val_ssim"], run_dir / "ssim.png", ylabel="SSIM")
 

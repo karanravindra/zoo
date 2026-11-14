@@ -27,5 +27,16 @@ Notes:
 - Splits: `val_size` train sprites are held out for validation; the official validation split is the test set.
 - LDM checkpoints are self-contained: they bundle the AE, tokenizer and latent statistics, so `load_ldm(path)` is all sampling needs.
 - Images live in [-1, 1] (RGBA, RGB zeroed where alpha is 0); diffusion time runs from t=0 (noise) to t=1 (data).
-- Grids are composited over a checkerboard and upscaled 8x. Alpha is modelled as a plain fourth channel; revisit
-  once `stats.py` shows whether alpha is binary.
+- Grids are composited over a checkerboard and upscaled 8x.
+- Alpha is exactly binary (0 or 255) in the data. With `--binary-alpha` (default on), the AE decodes alpha as an
+  opacity logit trained with BCE (weighted by `--alpha-weight`), the RGB loss only counts opaque pixels, and
+  `Autoencoder.to_image` thresholds alpha and blanks RGB where transparent. Every consumer of decoder output (AE
+  metrics, recon grids, LDM sampling) goes through `to_image`. AE checkpoints saved before the flag existed load
+  with `binary_alpha=False` (plain 4-channel MSE). `train_loss` in `metrics.csv` is the objective; the `*_mse`,
+  PSNR and SSIM columns are on decoded images, so they stay comparable across both modes.
+- `train_ae.py --grad-clip` (default 1.0, 0 disables) clips the global gradient norm. `metrics.csv` logs the
+  pre-clip norm per epoch (`grad_norm` mean, `grad_norm_max`) and `clip_frac`, the share of steps that were clipped.
+  Without clipping, binary alpha at lr 2.5e-3 had loss spikes at the LR peak and ended 0.7 dB below plain MSE.
+- `train_ae.py --hflip-prob p` mirrors each training sprite left-right with probability `p` (default 0). Val and
+  test are never flipped, so val/test metrics measure the unflipped distribution. Not used for the LDM: sprites
+  are mostly lit from the top-left, so flips would change the style it learns.

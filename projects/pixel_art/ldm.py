@@ -49,11 +49,19 @@ class AEConfig(_Serializable):
     # Per training sample, with this probability the second (detail) half of the latent channels is zeroed
     # before decoding, so the first half must carry global information and the second half only refines it.
     mask_prob: float = 0.0
+    # Alpha in the data is exactly 0 or 255. If set, the decoder's alpha channel is an opacity logit trained with
+    # BCE, RGB loss counts opaque pixels only, and decoded images get hard alpha with RGB blanked where transparent.
+    # If unset, all four channels are plain MSE regression (how checkpoints saved before this flag were trained).
+    binary_alpha: bool = True
+    alpha_weight: float = 0.1  # weight of the alpha BCE relative to the opaque-pixel RGB MSE (binary_alpha only)
+    # augmentation (training batches only; val/test are never flipped)
+    hflip_prob: float = 0.0  # per-sample probability of mirroring a training sprite left-right
     # optimization
     batch_size: int = 256
     epochs: int = 5
     lr: float = 1e-3
     weight_decay: float = 1e-4
+    grad_clip: float = 1.0  # max global gradient norm (0 disables); grad_norm columns in metrics.csv show how often it bites
     # runtime
     seed: int = 0
     deterministic: bool = True
@@ -63,6 +71,11 @@ class AEConfig(_Serializable):
     @property
     def latent_size(self) -> int:
         return IMAGE_SIZE >> self.downsample
+
+    @classmethod
+    def from_dict(cls, d: dict) -> AEConfig:
+        # keys older configs lack get the values those runs actually used, not today's defaults
+        return super().from_dict({"binary_alpha": False, "alpha_weight": 1.0, "grad_clip": 0.0, **d})
 
 
 @dataclass
@@ -111,8 +124,9 @@ def up_gn(c_in: int, c_out: int, k: int = 3) -> nn.Sequential:
 class Autoencoder(nn.Module):
     """Conv encoder with `downsample` stride-2 stages to a `latent_channels` code, mirrored decoder."""
 
-    def __init__(self, in_channels: int = CHANNELS, width: int = 32, latent_channels: int = 8, kernel_size: int = 3, downsample: int = 2):
+    def __init__(self, in_channels: int = CHANNELS, width: int = 32, latent_channels: int = 8, kernel_size: int = 3, downsample: int = 2, binary_alpha: bool = False):
         super().__init__()
+        self.binary_alpha = binary_alpha
         k = kernel_size
         ch = [width * min(2**i, 4) for i in range(downsample + 1)]
         enc: list[nn.Module] = [conv_gn(in_channels, ch[0], k)]
@@ -137,6 +151,23 @@ class Autoencoder(nn.Module):
             z = self.mask_detail(z, mask_prob)
         return self.decode(z)
 
+    def to_image(self, out: torch.Tensor) -> torch.Tensor:
+        """Raw decoder output -> RGBA image in [-1, 1]. With binary_alpha, alpha is the thresholded logit and RGB is
+        set to -1 (uint8 0) where transparent, matching the data."""
+        if not self.binary_alpha:
+            return out.clamp(-1, 1)
+        opaque = out[:, 3:] > 0
+        rgb = torch.where(opaque, out[:, :3].clamp(-1, 1), -1.0)
+        return torch.cat([rgb, opaque.to(out.dtype) * 2 - 1], dim=1)
+
+    def loss(self, out: torch.Tensor, x: torch.Tensor, alpha_weight: float = 1.0) -> torch.Tensor:
+        """Training loss of raw decoder output `out` against target images `x` in [-1, 1]."""
+        if not self.binary_alpha:
+            return F.mse_loss(out, x)
+        opaque = (x[:, 3:] > 0).to(out.dtype)
+        rgb_mse = ((out[:, :3] - x[:, :3]) ** 2 * opaque).sum() / (3 * opaque.sum()).clamp_min(1)
+        return rgb_mse + alpha_weight * F.binary_cross_entropy_with_logits(out[:, 3:], opaque)
+
     @staticmethod
     def mask_detail(z: torch.Tensor, p: float) -> torch.Tensor:
         """Zero the second half of the channels of each sample independently with probability p."""
@@ -146,7 +177,7 @@ class Autoencoder(nn.Module):
 
 
 def build_ae(cfg: AEConfig) -> Autoencoder:
-    return Autoencoder(CHANNELS, cfg.width, cfg.latent_channels, cfg.kernel_size, cfg.downsample)
+    return Autoencoder(CHANNELS, cfg.width, cfg.latent_channels, cfg.kernel_size, cfg.downsample, cfg.binary_alpha)
 
 
 # --- denoiser ----------------------------------------------------------------
@@ -401,7 +432,7 @@ class LatentDiffusion:
             guidance_scale=self.cfg.guidance_scale if guidance_scale is None else guidance_scale,
             noise=noise,
         )
-        return self.ae.decode(z * self.latent_std + self.latent_mean).clamp(-1, 1)
+        return self.ae.to_image(self.ae.decode(z * self.latent_std + self.latent_mean))
 
     def generate_prompts(self, prompts: list[str], **kw) -> torch.Tensor:
         return self.generate(self.encode_prompts(prompts), **kw)
