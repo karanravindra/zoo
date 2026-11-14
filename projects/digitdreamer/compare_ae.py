@@ -6,16 +6,18 @@ Defaults to every run under `<repo>/runs/digitdreamer/ae` and writes `ae_compari
 Each run is labelled by the config values that differ between the runs (e.g. `latent_channels=4, mask_prob=0.5`).
 """
 
-import argparse
 import csv
 import json
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+import tyro
+from tyro.conf import Positional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import RUNS_ROOT  # noqa: E402
@@ -50,11 +52,14 @@ def make_labels(runs: list[dict]) -> list[str]:
     return labels
 
 
+@dataclass
+class Args:
+    runs: Positional[list[Path]] = field(default_factory=list)  # AE run dirs (default: all under runs/digitdreamer/ae)
+    out: Path = RUNS_ROOT / "ae_comparison.png"
+
+
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("runs", nargs="*", type=Path, help="AE run dirs (default: all under runs/digitdreamer/ae)")
-    p.add_argument("--out", type=Path, default=RUNS_ROOT / "ae_comparison.png")
-    args = p.parse_args()
+    args = tyro.cli(Args, description=__doc__)
 
     dirs = args.runs or [d for d in (RUNS_ROOT / "ae").iterdir() if d.is_dir()]
     runs = [load_run(d) for d in sorted(dirs, key=lambda d: d.name)]  # legend/colour order = directory order

@@ -25,6 +25,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import torch
+import tyro
 from torch.utils.data import DataLoader
 from torchinfo import summary
 from torchvision.utils import save_image
@@ -41,6 +42,7 @@ from dreamer import (  # noqa: E402
     rectified_flow_loss,
     save_flow,
 )
+
 from zoo import data  # noqa: E402
 from zoo.utils.device import get_device, seed_everything  # noqa: E402
 
@@ -92,7 +94,7 @@ def save_samples(dreamer: Dreamer, num_classes: int, device, path: Path) -> None
     save_image(to_unit(imgs), path, nrow=SAMPLES_PER_CLASS, padding=1)
 
 
-def main(cfg: FlowConfig = FlowConfig()):
+def main(cfg: FlowConfig):
     seed_everything(cfg.seed, deterministic=cfg.deterministic)
     device = get_device()
     print(f"Using device: {device}")
@@ -200,4 +202,4 @@ def main(cfg: FlowConfig = FlowConfig()):
 
 
 if __name__ == "__main__":
-    main()
+    main(tyro.cli(FlowConfig, description=__doc__))

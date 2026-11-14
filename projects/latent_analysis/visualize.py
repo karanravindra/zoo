@@ -18,10 +18,11 @@ where <method> is pca, tsne_p<perplexity>, umap.
 
 from __future__ import annotations
 
-import argparse
 import math
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import matplotlib
 
@@ -30,12 +31,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
+import tyro
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from embed import DATA_ROOT, DEFAULT_MODEL, latent_dir, load_embeddings  # noqa: E402
 from kmeans import RUNS_ROOT  # noqa: E402
+
 from zoo.data import stargan  # noqa: E402
 
 # Categorical slots that stay distinguishable (incl. colorblind) for all pairs in a scatter.
@@ -130,20 +133,23 @@ def plot_variance(explained: np.ndarray, path: Path) -> None:
     plt.close(fig)
 
 
+@dataclass
+class Args:
+    dataset: Literal[tuple(stargan.ALL)] = "afhq_v2"
+    model: str = DEFAULT_MODEL  # Hugging Face model id
+    image_size: int = 256
+    split: str | None = None  # defaults to the train split
+    perplexities: list[float] = field(default_factory=lambda: [5, 30, 100])
+    no_umap: bool = False
+    pca_dims: int = 50  # PCA dims fed to t-SNE / UMAP
+    k: int | None = None  # also color by this k-means run (from kmeans.py)
+    seed: int = 0
+    data_root: Path = DATA_ROOT
+    runs_root: Path = RUNS_ROOT
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--dataset", choices=stargan.ALL, default="afhq_v2")
-    p.add_argument("--model", default=DEFAULT_MODEL, help="Hugging Face model id")
-    p.add_argument("--image-size", type=int, default=256)
-    p.add_argument("--split", default=None, help="defaults to the train split")
-    p.add_argument("--perplexities", type=float, nargs="+", default=[5, 30, 100])
-    p.add_argument("--no-umap", action="store_true")
-    p.add_argument("--pca-dims", type=int, default=50, help="PCA dims fed to t-SNE / UMAP")
-    p.add_argument("--k", type=int, default=None, help="also color by this k-means run (from kmeans.py)")
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--data-root", type=Path, default=DATA_ROOT)
-    p.add_argument("--runs-root", type=Path, default=RUNS_ROOT)
-    args = p.parse_args()
+    args = tyro.cli(Args, description=__doc__)
 
     split = args.split or stargan.splits(args.dataset)[0]
     src = latent_dir(args.dataset, args.model, args.image_size, args.data_root)

@@ -6,29 +6,35 @@ Defaults to the latest ldm run's last.pt and the first 8 validation captions. Wr
 (one row per prompt) to `<repo>/runs/pixel_art/sample.png` unless `--out` is given.
 """
 
-import argparse
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
+import tyro
+from tyro.conf import Positional, UseAppendAction
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import RUNS_ROOT, latest_checkpoint, save_grid  # noqa: E402
 from ldm import load_ldm  # noqa: E402
 from pixel_data import load_test_captions  # noqa: E402
+
 from zoo.utils.device import get_device  # noqa: E402
 
 
+@dataclass
+class Args:
+    ckpt: Positional[str | None] = None  # ldm checkpoint (default: latest ldm run's last.pt)
+    prompt: UseAppendAction[list[str]] = field(default_factory=list)  # caption to draw (repeatable; default: first validation captions)
+    per_prompt: int = 8
+    steps: int | None = None
+    guidance: float | None = None  # classifier-free guidance scale (1 = off)
+    seed: int = 0
+    out: Path = RUNS_ROOT / "sample.png"
+
+
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("ckpt", nargs="?", help="ldm checkpoint (default: latest ldm run's last.pt)")
-    p.add_argument("--prompt", action="append", help="caption to draw (repeatable; default: first validation captions)")
-    p.add_argument("--per-prompt", type=int, default=8)
-    p.add_argument("--steps", type=int, default=None)
-    p.add_argument("--guidance", type=float, default=None, help="classifier-free guidance scale (1 = off)")
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--out", type=Path, default=RUNS_ROOT / "sample.png")
-    args = p.parse_args()
+    args = tyro.cli(Args, description=__doc__)
 
     device = get_device()
     ckpt = Path(args.ckpt) if args.ckpt else latest_checkpoint("ldm", "last.pt")

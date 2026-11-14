@@ -23,13 +23,15 @@ splits and k. For a combined dataset, the members' tags are copied in once, on t
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import torch
+import tyro
 from PIL import Image
 from tqdm import tqdm
 
@@ -37,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from embed import DATA_ROOT, DEFAULT_MODEL, REPO_ROOT, latent_dir, load_embeddings  # noqa: E402
 from image_index import image_ids, image_root, labels_file, sync_index  # noqa: E402
 from kmeans import RUNS_ROOT, paths_key, write_cluster_json  # noqa: E402
+
 from zoo.data import stargan  # noqa: E402
 
 
@@ -54,17 +57,20 @@ def rel(p: Path) -> str:
     return str(p.resolve().relative_to(REPO_ROOT))
 
 
+@dataclass
+class Args:
+    dataset: Literal[tuple(stargan.ALL)] = "afhq_v2"
+    model: str = DEFAULT_MODEL  # Hugging Face model id
+    image_size: int = 256
+    split: str | None = None  # defaults to the train split
+    thumb_size: int = 160
+    workers: int = 8
+    data_root: Path = DATA_ROOT
+    runs_root: Path = RUNS_ROOT
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--dataset", choices=stargan.ALL, default="afhq_v2")
-    p.add_argument("--model", default=DEFAULT_MODEL, help="Hugging Face model id")
-    p.add_argument("--image-size", type=int, default=256)
-    p.add_argument("--split", default=None, help="defaults to the train split")
-    p.add_argument("--thumb-size", type=int, default=160)
-    p.add_argument("--workers", type=int, default=8)
-    p.add_argument("--data-root", type=Path, default=DATA_ROOT)
-    p.add_argument("--runs-root", type=Path, default=RUNS_ROOT)
-    args = p.parse_args()
+    args = tyro.cli(Args, description=__doc__)
 
     split = args.split or stargan.splits(args.dataset)[0]
     src = latent_dir(args.dataset, args.model, args.image_size, args.data_root)

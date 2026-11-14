@@ -25,4 +25,4 @@ Files:
 Checkpoints are self-describing (weights plus the config that built them), so
 `load_checkpoint(path)` returns a ready model with no other setup. The validation set is carved
 deterministically from the train split (`val_size`, `seed`) and is used only to pick `best.pt`.
-Settings are changed by editing `Config` defaults; there are no CLI flags.
+Every `Config` field is a CLI flag (via tyro), e.g. `uv run projects/digitnet/train.py --epochs 20 --lr 1e-3`; see `--help`.

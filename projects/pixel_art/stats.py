@@ -23,12 +23,12 @@ Reported, for train and validation separately plus their overlap:
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import io
 import json
 import re
 from collections import Counter
+from dataclasses import dataclass
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -44,7 +44,7 @@ from PIL import Image
 REPO_ID = "Angais/pixel-art-atlas-1.4m"
 RUNS_ROOT = Path(__file__).resolve().parents[2] / "runs" / "pixel_art" / "stats"
 WORD = re.compile(r"[a-z0-9']+")
-
+import tyro
 
 # ---------------------------------------------------------------- per-shard image stats
 
@@ -351,11 +351,14 @@ def load_split(files: list[str], workers: int) -> dict:
         return merge(pool.map(shard_stats, files))
 
 
+@dataclass
+class Args:
+    max_files: int | None = None  # only use this many train shards
+    workers: int = 4
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--max-files", type=int, default=None, help="only use this many train shards")
-    ap.add_argument("--workers", type=int, default=4)
-    args = ap.parse_args()
+    args = tyro.cli(Args, description=__doc__)
     RUNS_ROOT.mkdir(parents=True, exist_ok=True)
 
     root = Path(snapshot_download(REPO_ID, repo_type="dataset", allow_patterns=["*.parquet"]))

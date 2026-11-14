@@ -29,6 +29,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import torch
+import tyro
 from torchinfo import summary
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -37,13 +38,14 @@ from ldm import (  # noqa: E402
     LatentDiffusion,
     LDMConfig,
     build_denoiser,
+    diffusion_loss,
     load_ae,
     load_ldm,
-    uncond_tokens,
-    diffusion_loss,
     save_ldm,
+    uncond_tokens,
 )
 from pixel_data import load_data, load_tokenizer, to_pm1  # noqa: E402
+
 from zoo.utils.device import get_device, seed_everything  # noqa: E402
 
 METRIC_FIELDS = ["epoch", "lr", "train_loss", "val_loss", "steps_per_s", "epoch_time_s"]
@@ -92,7 +94,7 @@ def save_samples(ldm: LatentDiffusion, real: torch.Tensor, tokens: torch.Tensor,
     save_grid(torch.cat([real[:, None], imgs], dim=1).flatten(0, 1), path, nrow=SAMPLES_PER_PROMPT + 1)
 
 
-def main(cfg: LDMConfig = LDMConfig()):
+def main(cfg: LDMConfig):
     seed_everything(cfg.seed, deterministic=cfg.deterministic)
     device = get_device()
     print(f"Using device: {device}")
@@ -206,4 +208,4 @@ def main(cfg: LDMConfig = LDMConfig()):
 
 
 if __name__ == "__main__":
-    main()
+    main(tyro.cli(LDMConfig, description=__doc__))

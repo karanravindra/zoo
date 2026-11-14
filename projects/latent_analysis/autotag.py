@@ -26,24 +26,28 @@ Never writes labels.json or rejections.json.
 
 from __future__ import annotations
 
-import argparse
 import json
 import shlex
 import sys
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+import tyro
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, precision_recall_curve
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
+from tyro.conf import UseAppendAction
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from embed import DATA_ROOT, DEFAULT_MODEL, latent_dir, load_embeddings  # noqa: E402
 from image_index import image_ids, image_root, labels_file, read_tags, rejections_file, sync_index  # noqa: E402
 from kmeans import RUNS_ROOT  # noqa: E402
+
 from zoo.data import stargan  # noqa: E402
 
 
@@ -66,25 +70,28 @@ def make_probe(C: float) -> LogisticRegression:
     return LogisticRegression(C=C, class_weight="balanced", max_iter=2000)
 
 
+@dataclass
+class Args:
+    dataset: Literal[tuple(stargan.ALL)] = "afhq_v2"
+    model: str = DEFAULT_MODEL  # Hugging Face model id
+    image_size: int = 256
+    min_pos: int = 5  # positives a tag needs before it gets a probe
+    min_neg: int = 5  # negatives (rejections) a tag needs
+    # tags no image has two of, as "A,B,..."; a positive for one is a negative for the others (repeatable)
+    exclusive_group: UseAppendAction[list[str]] = field(default_factory=list)
+    target_precision: float = 0.95
+    folds: int = 5  # CV folds, fewer when a class has fewer examples
+    C: float = 1.0  # inverse L2 strength of the logistic regression
+    min_score: float = 0.05  # scores below this aren't written
+    seed: int = 0
+    data_root: Path = DATA_ROOT
+    runs_root: Path = RUNS_ROOT
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--dataset", choices=stargan.ALL, default="afhq_v2")
-    p.add_argument("--model", default=DEFAULT_MODEL, help="Hugging Face model id")
-    p.add_argument("--image-size", type=int, default=256)
-    p.add_argument("--min-pos", type=int, default=5, help="positives a tag needs before it gets a probe")
-    p.add_argument("--min-neg", type=int, default=5, help="negatives (rejections) a tag needs")
-    p.add_argument("--exclusive-group", action="append", default=[], metavar="A,B,...",
-                   help="tags no image has two of; a positive for one is a negative for the others (repeatable)")
-    p.add_argument("--target-precision", type=float, default=0.95)
-    p.add_argument("--folds", type=int, default=5, help="CV folds, fewer when a class has fewer examples")
-    p.add_argument("--C", type=float, default=1.0, help="inverse L2 strength of the logistic regression")
-    p.add_argument("--min-score", type=float, default=0.05, help="scores below this aren't written")
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--data-root", type=Path, default=DATA_ROOT)
-    p.add_argument("--runs-root", type=Path, default=RUNS_ROOT)
-    args = p.parse_args()
+    args = tyro.cli(Args, description=__doc__)
     if args.min_pos < 2 or args.min_neg < 2:
-        p.error("--min-pos and --min-neg must be at least 2 for cross-validation")
+        sys.exit("--min-pos and --min-neg must be at least 2 for cross-validation")
 
     # Embeddings for every split, each row mapped to its stable image id (as export.py does).
     src = latent_dir(args.dataset, args.model, args.image_size, args.data_root)

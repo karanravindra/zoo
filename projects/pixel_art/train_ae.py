@@ -21,12 +21,14 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+import tyro
 from torchinfo import summary
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import new_run_dir, plot_curves, psnr, save_grid, ssim  # noqa: E402
 from ldm import AEConfig, build_ae, load_ae, save_ae  # noqa: E402
 from pixel_data import CHANNELS, IMAGE_SIZE, load_data, to_pm1  # noqa: E402
+
 from zoo.utils.device import get_device, seed_everything  # noqa: E402
 
 METRIC_FIELDS = ["epoch", "lr", "train_mse", "train_psnr", "val_mse", "val_mse_global", "val_psnr", "val_ssim", "steps_per_s", "epoch_time_s"]
@@ -60,7 +62,7 @@ def save_recon(model, images: torch.Tensor, path: Path, n: int = 16) -> None:
     save_grid(torch.cat([x, model(x).clamp(-1, 1)]), path, nrow=n)
 
 
-def main(cfg: AEConfig = AEConfig()):
+def main(cfg: AEConfig):
     seed_everything(cfg.seed, deterministic=cfg.deterministic)
     device = get_device()
     print(f"Using device: {device}")
@@ -161,4 +163,4 @@ def main(cfg: AEConfig = AEConfig()):
 
 
 if __name__ == "__main__":
-    main()
+    main(tyro.cli(AEConfig, description=__doc__))

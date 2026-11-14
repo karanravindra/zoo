@@ -6,29 +6,35 @@ Defaults to the latest flow run's last.pt and every digit. Writes a grid (rows =
 `<repo>/runs/digitdreamer/sample.png` unless `--out` is given.
 """
 
-import argparse
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
+import tyro
 from torchvision.utils import save_image
+from tyro.conf import Positional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import RUNS_ROOT, latest_checkpoint, to_unit  # noqa: E402
 from dreamer import LATENT_SIZE, load_dreamer  # noqa: E402
+
 from zoo.utils.device import get_device  # noqa: E402
 
 
+@dataclass
+class Args:
+    ckpt: Positional[str | None] = None  # flow checkpoint (default: latest flow run's last.pt)
+    digits: list[int] = field(default_factory=lambda: list(range(10)))
+    per_digit: int = 10
+    steps: int | None = None
+    cfg: float | None = None  # classifier-free guidance scale (1 = off)
+    seed: int = 0
+    out: Path = RUNS_ROOT / "sample.png"
+
+
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("ckpt", nargs="?", help="flow checkpoint (default: latest flow run's last.pt)")
-    p.add_argument("--digits", type=int, nargs="+", default=list(range(10)))
-    p.add_argument("--per-digit", type=int, default=10)
-    p.add_argument("--steps", type=int, default=None)
-    p.add_argument("--cfg", type=float, default=None, help="classifier-free guidance scale (1 = off)")
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--out", type=Path, default=RUNS_ROOT / "sample.png")
-    args = p.parse_args()
+    args = tyro.cli(Args, description=__doc__)
 
     device = get_device()
     ckpt = Path(args.ckpt) if args.ckpt else latest_checkpoint("flow", "last.pt")
