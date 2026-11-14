@@ -1,0 +1,9 @@
+[project]
+name = "ledger-vllm"
+version = "0.1.0"
+description = "Separate environment for the vLLM server used by ledger's evaluate.py (vLLM pins its own torch/transformers)."
+requires-python = ">=3.12,<3.13"
+dependencies = ["vllm==0.33.0"]
+
+[tool.uv]
+package = false
