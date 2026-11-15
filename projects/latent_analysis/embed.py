@@ -33,10 +33,9 @@ from tqdm import tqdm
 from transformers import AutoImageProcessor, AutoModel
 
 from zoo.data import stargan
+from zoo.paths import DATA_ROOT, REPO_ROOT
 from zoo.utils.device import get_device
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DATA_ROOT = REPO_ROOT / "data"
 DEFAULT_MODEL = "facebook/dinov3-vitb16-pretrain-lvd1689m"
 
 

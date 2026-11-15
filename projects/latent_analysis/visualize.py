@@ -24,22 +24,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
 import tyro
+from embed import DEFAULT_MODEL, latent_dir, load_embeddings
+from kmeans import RUNS_ROOT
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from embed import DATA_ROOT, DEFAULT_MODEL, latent_dir, load_embeddings  # noqa: E402
-from kmeans import RUNS_ROOT  # noqa: E402
-
-from zoo.data import stargan  # noqa: E402
+from zoo.data import stargan
+from zoo.paths import DATA_ROOT
+from zoo.plot import plt
 
 # Categorical slots that stay distinguishable (incl. colorblind) for all pairs in a scatter.
 # Datasets here have <= 5 classes (3 + 2 for stargan); clusters use small multiples instead of k hues.
