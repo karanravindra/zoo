@@ -8,16 +8,12 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "accelerate>=1.15.0",
-    "bitsandbytes>=0.50.2",
+    "cut-cross-entropy",
     "datasets>=5.2.0",
-    "flash-linear-attention>=0.6.0",
+    "gigatoken>=0.11.0",
     "matplotlib>=3.11.2",
-    "peft>=0.21.3",
+    "nvidia-ml-py>=13.615.71",
     "pyarrow>=26.0.1",
-    "pytesseract>=0.3.13",
-    "rapidfuzz>=3.14.6",
-    "requests>=2.34.2",
     "scikit-learn>=1.9.1",
     "torch>=2.15.0",
     "torchinfo>=1.8.0",
@@ -28,9 +24,21 @@ dependencies = [
     "umap-learn>=0.6.0",
 ]
 
-[project.scripts]
-zoo = "zoo:main"
+[dependency-groups]
+# projects/ledger only: `uv run --group ledger projects/ledger/<script>.py`
+ledger = [
+    "accelerate>=1.15.0",
+    "bitsandbytes>=0.50.2",
+    "flash-linear-attention>=0.6.0",
+    "peft>=0.21.3",
+    "pytesseract>=0.3.13",
+    "rapidfuzz>=3.14.6",
+    "requests>=2.34.2",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.sources]
+cut-cross-entropy = { git = "https://github.com/apple/ml-cross-entropy.git" }
