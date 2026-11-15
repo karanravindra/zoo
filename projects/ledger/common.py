@@ -4,17 +4,16 @@ from __future__ import annotations
 
 import json
 import random
-import subprocess
 from dataclasses import asdict
-from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import torch
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNS_ROOT = REPO_ROOT / "runs" / "ledger"
-CACHE_ROOT = REPO_ROOT / "data" / "cache" / "ledger"
+from zoo.paths import DATA_ROOT
+from zoo.runs import new_run_dir
+
+CACHE_ROOT = DATA_ROOT / "cache" / "ledger"
 
 MODEL = "Qwen/Qwen3.5-0.8B"
 PIXELS_PER_TOKEN = 32 * 32  # Qwen3.5 vision: 16px patches, 2x2 merge -> one LLM token per 32x32 pixels
@@ -171,15 +170,6 @@ def parse_json_object(text: str) -> dict | None:
 # ---------------------------------------------------------------- runs
 
 
-def git_commit() -> str | None:
-    try:
-        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout.strip()
-        dirty = subprocess.run(["git", "status", "--porcelain"], cwd=REPO_ROOT, capture_output=True, text=True)
-        return out + ("-dirty" if dirty.stdout.strip() else "")
-    except (OSError, subprocess.CalledProcessError):
-        return None
-
-
 def package_versions() -> dict[str, str | None]:
     out = {}
     for name in PACKAGES:
@@ -191,11 +181,6 @@ def package_versions() -> dict[str, str | None]:
     return out
 
 
-def new_run_dir(stage: str, config, device: str, **extra) -> Path:
+def new_ledger_run(stage: str, config, device: str, dev: bool = False, **extra) -> Path:
     """runs/ledger/<stage>/<timestamp>/ with config.json (config, git commit, device, package versions, extras)."""
-    run_dir = RUNS_ROOT / stage / datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir.mkdir(parents=True, exist_ok=False)
-    meta = {"config": asdict(config), "git_commit": git_commit(), "device": device, "packages": package_versions(), **extra}
-    (run_dir / "config.json").write_text(json.dumps(meta, indent=2))
-    print(f"Run dir: {run_dir}")
-    return run_dir
+    return new_run_dir("ledger", asdict(config), device, stage=stage, dev=dev, packages=package_versions(), **extra)
