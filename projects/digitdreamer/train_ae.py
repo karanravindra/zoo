@@ -13,10 +13,7 @@ Each run gets its own directory, `<repo>/runs/digitdreamer/ae/<timestamp>/`, con
   recon.png      test images (top rows) and their reconstructions (bottom rows)
 """
 
-import csv
 import json
-import sys
-import time
 from pathlib import Path
 
 import torch
@@ -26,14 +23,18 @@ from torch.utils.data import DataLoader
 from torchinfo import summary
 from torchvision.utils import save_image
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import make_splits, new_run_dir, plot_curves, psnr, ssim, to_unit  # noqa: E402
-from dreamer import IMAGE_SIZE, AEConfig, build_ae, load_ae, save_ae  # noqa: E402
+from common import make_splits
+from dreamer import IMAGE_SIZE, AEConfig, build_ae, load_ae, save_ae
 
-from zoo import data  # noqa: E402
-from zoo.utils.device import get_device, seed_everything  # noqa: E402
+from zoo import data
+from zoo.metrics import psnr, ssim, to_unit
+from zoo.monitor import GPU_FIELDS, GpuMonitor
+from zoo.plot import plot_curves
+from zoo.runs import MetricsLogger, new_run_dir
+from zoo.train import STAT_FIELDS, ParamStats, Throughput
+from zoo.utils.device import get_device, seed_everything
 
-METRIC_FIELDS = ["epoch", "lr", "train_mse", "val_mse", "val_mse_global", "val_psnr", "val_ssim", "steps_per_s", "epoch_time_s"]
+METRIC_FIELDS = ["epoch", "lr", "train_mse", "val_mse", "val_mse_global", "val_psnr", "val_ssim", *STAT_FIELDS, *GPU_FIELDS, "steps_per_s", "epoch_time_s"]
 
 
 @torch.no_grad()
@@ -71,7 +72,7 @@ def main(cfg: AEConfig):
     seed_everything(cfg.seed, deterministic=cfg.deterministic)
     device = get_device()
     print(f"Using device: {device}")
-    run_dir = new_run_dir("ae", cfg.to_dict(), device)
+    run_dir = new_run_dir("digitdreamer", cfg.to_dict(), device, dev=cfg.dev, stage="ae")
 
     train_ds, val_ds, test_ds = make_splits(cfg.dataset, cfg.val_size, cfg.seed)
     loader_kw = dict(
@@ -98,15 +99,15 @@ def main(cfg: AEConfig):
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=cfg.lr, total_steps=cfg.epochs * len(train_dl))
 
-    rows: list[dict] = []
     best_val, best_epoch = float("inf"), 0
-    with open(run_dir / "metrics.csv", "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=METRIC_FIELDS)
-        writer.writeheader()
+    stats = ParamStats(model, every=100)  # gradient / weight statistics, see zoo.train.ParamStats
+    gpu = GpuMonitor(device)
+    global_step = 0
+    with MetricsLogger(run_dir / "metrics.csv", METRIC_FIELDS) as logger:
+        rows = logger.rows
 
         for epoch in range(1, cfg.epochs + 1):
-            t0 = time.perf_counter()
-            t_log, n_log = t0, 0  # window for the rolling steps/s
+            tp = Throughput()  # rolling steps/s window
             lr = sched.get_last_lr()[0]
             model.train()
             loss_sum = torch.zeros((), device=device)
@@ -116,20 +117,22 @@ def main(cfg: AEConfig):
                 loss = F.mse_loss(model(x, cfg.mask_prob), x)
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
+                global_step += 1
+                stats.grads(global_step)
                 opt.step()
+                stats.stepped(global_step)
                 sched.step()
 
                 loss_sum += loss.detach() * len(x)
                 seen += len(x)
                 if step % cfg.log_every == 0:
                     mean_loss = loss_sum.item() / seen  # syncs the device, so the timing below is real
-                    now = time.perf_counter()
-                    steps_per_s_now = (step - n_log) / (now - t_log)
-                    t_log, n_log = now, step
+                    steps_per_s_now = tp.tick(step)
                     print(f"epoch {epoch}/{cfg.epochs} step {step}/{len(train_dl)}: train_mse={mean_loss:.5f} ({steps_per_s_now:.1f} steps/s)")
 
             loss_sum.item()  # sync the device so the timing below covers all training work
-            steps_per_s = len(train_dl) / (time.perf_counter() - t0)
+            steps_per_s = tp.rate(len(train_dl))
+            train_stats, gpu_stats = stats.read()[0], gpu.read()  # read before validation, so both cover training only
             val = evaluate(model, val_dl, device)
             val_mse = val["mse"]
             row = {
@@ -140,12 +143,12 @@ def main(cfg: AEConfig):
                 "val_mse_global": val["mse_global"],
                 "val_psnr": val["psnr"],
                 "val_ssim": val["ssim"],
+                **train_stats,
+                **gpu_stats,
                 "steps_per_s": steps_per_s,
-                "epoch_time_s": time.perf_counter() - t0,
+                "epoch_time_s": tp.elapsed(),
             }
-            rows.append(row)
-            writer.writerow(row)
-            f.flush()
+            logger.log(row)
             print(
                 f"epoch {epoch}: train_mse={row['train_mse']:.5f} val_mse={val_mse:.5f} val_mse_global={val['mse_global']:.5f} "
                 f"val_psnr={val['psnr']:.2f}dB val_ssim={val['ssim']:.4f} ({row['steps_per_s']:.1f} steps/s, {row['epoch_time_s']:.1f}s)"

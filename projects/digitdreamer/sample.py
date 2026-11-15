@@ -6,7 +6,6 @@ Defaults to the latest flow run's last.pt and every digit. Writes a grid (rows =
 `<repo>/runs/digitdreamer/sample.png` unless `--out` is given.
 """
 
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,11 +14,12 @@ import tyro
 from torchvision.utils import save_image
 from tyro.conf import Positional
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import RUNS_ROOT, latest_checkpoint, to_unit  # noqa: E402
-from dreamer import LATENT_SIZE, load_dreamer  # noqa: E402
+from dreamer import LATENT_SIZE, load_dreamer
 
-from zoo.utils.device import get_device  # noqa: E402
+from zoo.metrics import to_unit
+from zoo.paths import runs_root
+from zoo.runs import latest_checkpoint
+from zoo.utils.device import get_device
 
 
 @dataclass
@@ -30,14 +30,14 @@ class Args:
     steps: int | None = None
     cfg: float | None = None  # classifier-free guidance scale (1 = off)
     seed: int = 0
-    out: Path = RUNS_ROOT / "sample.png"
+    out: Path = runs_root("digitdreamer") / "sample.png"
 
 
 def main():
     args = tyro.cli(Args, description=__doc__)
 
     device = get_device()
-    ckpt = Path(args.ckpt) if args.ckpt else latest_checkpoint("flow", "last.pt")
+    ckpt = Path(args.ckpt) if args.ckpt else latest_checkpoint("digitdreamer", "last.pt", stage="flow")
     dreamer = load_dreamer(ckpt).to(device)
 
     y = torch.tensor(args.digits, device=device).repeat_interleave(args.per_digit)

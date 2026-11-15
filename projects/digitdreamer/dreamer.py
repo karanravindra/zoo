@@ -50,6 +50,7 @@ class AEConfig(_Serializable):
     seed: int = 0
     deterministic: bool = True
     compile: bool = False  # torch.compile the model with mode="reduce-overhead" (CUDA graphs on GPU)
+    dev: bool = False  # dev run: outputs go to a temporary directory deleted on exit, so nothing is logged to runs/
     num_workers: int = 4
     log_every: int = 20
 
@@ -76,6 +77,7 @@ class FlowConfig(_Serializable):
     seed: int = 0
     deterministic: bool = True
     compile: bool = False  # torch.compile the model with mode="reduce-overhead" (CUDA graphs on GPU)
+    dev: bool = False  # dev run: outputs go to a temporary directory deleted on exit, so nothing is logged to runs/
     num_workers: int = 4  # only used to encode the dataset once
     log_every: int = 100
 
