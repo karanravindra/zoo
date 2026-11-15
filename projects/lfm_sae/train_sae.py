@@ -27,7 +27,6 @@ eval rows), sae_<n_latents>/best.pt (lowest eval fvu) and last.pt ({"sae": state
 
 from __future__ import annotations
 
-import csv
 import json
 import math
 import os
@@ -44,8 +43,14 @@ import torch.nn.functional as F
 import tyro
 
 import extract
-from common import MODEL, MODEL_REVISION, RUNS_ROOT, git_commit, hook_name, hub_sha
+from common import MODEL, MODEL_REVISION, hook_name, hub_sha
 from sae import TopKSAE
+
+from zoo.monitor import GPU_FIELDS, GpuMonitor
+from zoo.paths import runs_root
+from zoo.plot import plt
+from zoo.runs import MetricsLogger, dev_run_dir, git_commit
+from zoo.train import STAT_FIELDS, ParamStats
 
 D_MODEL = extract.D_MODEL
 
@@ -90,6 +95,7 @@ class Config:
     log_every: int = 100  # steps between train log rows
     device: str = "cuda"  # torch device
     compile: bool = False  # torch.compile the language model (pads batches to a multiple of 128; evals recompile)
+    dev: bool = False  # dev run: outputs go to a temporary directory deleted on exit, so nothing is logged to runs/
 
 
 def data_config(cfg: Config) -> extract.Config:
@@ -274,11 +280,6 @@ def eval_ce(lm, full_layers, short_layers, module, saes: dict[int, TopKSAE], mea
 
 
 def plot(rows: list[dict], path: Path):
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
     for n in sorted({r["n_latents"] for r in rows}):
         train = [r for r in rows if r["split"] == "train" and r["n_latents"] == n]
@@ -315,8 +316,11 @@ def main(cfg: Config):
     if cfg.chat_revision is None:
         cfg.chat_revision = hub_sha(cfg.chat_dataset)
     hook = hook_name(cfg.site, cfg.layer)
-    run = RUNS_ROOT / "train" / datetime.now().strftime("%Y%m%d-%H%M%S")
-    run.mkdir(parents=True)
+    if cfg.dev:
+        run = dev_run_dir("lfm_sae")
+    else:
+        run = runs_root("lfm_sae") / "train" / datetime.now().strftime("%Y%m%d-%H%M%S")
+        run.mkdir(parents=True)
     device_name = torch.cuda.get_device_name() if cfg.device.startswith("cuda") else cfg.device
     (run / "config.json").write_text(json.dumps(
         {**asdict(cfg), "hook": hook, "git_commit": git_commit(), "device_name": device_name}, indent=2, default=str))
@@ -380,18 +384,15 @@ def main(cfg: Config):
               f"lr {base_lr(cfg, n):.3g}")
 
     total = cfg.num_tokens // cfg.batch_size
-    metrics = open(run / "metrics.csv", "w", newline="")
     cols = ["n_latents", "step", "tokens", "split", "lr", "fvu", "aux", "dead_frac", "ce_clean", "ce_sae",
-            "ce_ablate", "loss_recovered", "tokens_per_s"]
-    log = csv.DictWriter(metrics, cols)
-    log.writeheader()
-    rows: list[dict] = []
+            "ce_ablate", "loss_recovered", "tokens_per_s", *STAT_FIELDS, *GPU_FIELDS]
+    # Gradient norms per SAE. every=0: no weight-norm / update-ratio / gradient-direction detail, because that clones
+    # the gradients and weights, which is gigabytes for the larger dictionaries.
+    stats = {n: ParamStats(sae, every=0) for n, sae in saes.items()}
+    gpu = GpuMonitor(cfg.device)
+    logger = MetricsLogger(run / "metrics.csv", cols, float_fmt=".6g")
+    write, rows = logger.log, logger.rows
     best = {n: float("inf") for n in sizes}
-
-    def write(row: dict):
-        rows.append(row)
-        log.writerow({k: (f"{v:.6g}" if isinstance(v, float) else v) for k, v in row.items()})
-        metrics.flush()
 
     def evaluate(step: int) -> dict[int, dict]:
         evs = {}
@@ -429,7 +430,9 @@ def main(cfg: Config):
             sae.remove_parallel_grads()
             for g in opts[n].param_groups:
                 g["lr"] = lr_at(cfg, n, step, total)
+            stats[n].grads(step + 1)  # the gradients the optimizer is about to apply
             opts[n].step()
+            stats[n].stepped(step + 1)
             sae.normalize_decoder()
             with torch.no_grad():
                 since_fired[n] += cfg.batch_size
@@ -442,16 +445,17 @@ def main(cfg: Config):
             dt = time.time() - t_log
             k = cfg.log_every
             show = (step + 1) % (k * 10) == 0
+            gpu_stats = gpu.read()  # one reading for the window, shared by every SAE's row
             for n in sizes:
                 dead_frac = float((since_fired[n] > cfg.dead_tokens).float().mean())
                 write({"n_latents": n, "step": step + 1, "tokens": (step + 1) * cfg.batch_size, "split": "train",
                        "lr": opts[n].param_groups[0]["lr"], "fvu": acc[n]["fvu"] / k, "aux": acc[n]["aux"] / k,
-                       "dead_frac": dead_frac, "tokens_per_s": k * cfg.batch_size / dt})
+                       "dead_frac": dead_frac, "tokens_per_s": k * cfg.batch_size / dt, **stats[n].read()[0], **gpu_stats})
                 if show:
                     print(f"  {n:,}: fvu {acc[n]['fvu'] / k:.4f}, aux {acc[n]['aux'] / k:.3f}, dead {dead_frac:.1%}")
             if show:
                 eta = (total - step - 1) * (time.time() - t0) / (step + 1) / 60
-                mem = f", GPU peak {torch.cuda.max_memory_allocated() / 1e9:.1f} GB" if cfg.device.startswith("cuda") else ""
+                mem = f", GPU {gpu_stats.get('gpu_util', 0):.0f}% peak {gpu_stats['gpu_alloc_gb']:.1f} GiB" if gpu_stats else ""
                 print(f"step {step + 1:,}/{total:,}: {k * cfg.batch_size / dt:,.0f} tok/s, ETA {eta:.0f} min{mem}",
                       flush=True)
             acc = {n: {"fvu": 0.0, "aux": 0.0} for n in sizes}
@@ -460,11 +464,12 @@ def main(cfg: Config):
             evaluate(step + 1)
 
     final = evaluate(total)
-    metrics.close()
+    logger.close()
     results = {"hook": hook, "tokens": total * cfg.batch_size, "minutes": round((time.time() - t0) / 60, 1),
                "input_scale": scale, "saes": {str(n): ev for n, ev in final.items()}}
     if cfg.device.startswith("cuda"):
-        results["peak_gpu_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 2)
+        gpu.read()  # fold the last window into the run-wide peak (each read resets torch's peak counter)
+        results["peak_gpu_gb"] = round(gpu.summary()["peak_gpu_alloc_gb"] * 2**30 / 1e9, 2)
     (run / "results.json").write_text(json.dumps(results, indent=2))
     plot(rows, run / "curves.png")
     print(json.dumps(results, indent=2))

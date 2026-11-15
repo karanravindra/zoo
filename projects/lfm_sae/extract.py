@@ -58,7 +58,10 @@ import tyro
 from safetensors.torch import load_file, save_file
 from torch.utils.data import DataLoader, IterableDataset
 
-from common import MODEL, MODEL_REVISION, RUNS_ROOT, git_commit, hook_name, hub_sha
+from common import MODEL, MODEL_REVISION, hook_name, hub_sha
+
+from zoo.paths import runs_root
+from zoo.runs import git_commit
 
 Site = Literal["resid_post", "mixer_out", "mlp_out"]
 SOURCES = ("web", "chat")
@@ -449,7 +452,7 @@ def setup_run(cfg: Config) -> tuple[Config, Path]:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run = cfg.data_root / "extract" / stamp
     run.mkdir(parents=True)
-    link = RUNS_ROOT / "extract" / stamp
+    link = runs_root("lfm_sae") / "extract" / stamp
     link.parent.mkdir(parents=True, exist_ok=True)
     link.symlink_to(run, target_is_directory=True)
     names = [hook_name(s, i) for i in sorted(set(cfg.layers)) for s in cfg.sites]

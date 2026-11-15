@@ -182,3 +182,19 @@ every SAE that has a `features.json`. Files are re-read when they change.
 - `results.json`: totals, per-hook RMS/max norm, bytes, peak GPU memory.
 
 Read shards with `common.iter_shards(run, ["resid_post.12", "token_ids"])` and stats with `common.load_stats`.
+
+## Dev runs
+
+Pass `train_sae.py` `--dev` to try a change without logging anything: the usual outputs go to a temporary directory that is deleted
+when the script exits, so the run never appears under `runs/`.
+
+## Training diagnostics in metrics.csv
+
+Besides the columns above, every row has gradient and GPU columns (blank where a value was not measured):
+
+- `grad_norm`, `grad_norm_max`: mean and largest global gradient norm (before clipping) since the previous row;
+  `clip_frac`: fraction of steps clipped, when the script clips.
+- `weight_norm`, `update_ratio` and `grad_cos` are not logged here: they need copies of the gradients and weights,
+  which is gigabytes for the larger dictionaries.
+- `gpu_util` (mean %), `gpu_mem_gb` (peak device memory), `gpu_alloc_gb` (peak memory torch allocated),
+  `gpu_reserved_gb`, `gpu_power_w` (mean), `gpu_temp_c` (peak), sampled in the background while training.
