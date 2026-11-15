@@ -11,18 +11,9 @@ Each run gets its own directory, `<repo>/runs/digitnet/<timestamp>/`, containing
   curves.png     loss and accuracy curves
 """
 
-import csv
 import json
-import subprocess
-import sys
-import time
-from datetime import datetime
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 import tyro
@@ -30,17 +21,17 @@ from torch.utils.data import DataLoader, random_split
 from torchinfo import summary
 from tqdm import tqdm
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from digitnet import Config, build_model, load_checkpoint, save_checkpoint  # noqa: E402
+from digitnet import Config, build_model, load_checkpoint, save_checkpoint
 
-from zoo import data  # noqa: E402
-from zoo.utils.device import get_device, seed_everything  # noqa: E402
+from zoo import data
+from zoo.monitor import GPU_FIELDS, GpuMonitor
+from zoo.paths import DATA_ROOT
+from zoo.plot import plt
+from zoo.runs import MetricsLogger, new_run_dir
+from zoo.train import STAT_FIELDS, ParamStats, Throughput
+from zoo.utils.device import get_device, seed_everything
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DATA_ROOT = REPO_ROOT / "data"
-RUNS_ROOT = REPO_ROOT / "runs" / "digitnet"
-
-METRIC_FIELDS = ["epoch", "lr", "train_loss", "train_acc", "val_loss", "val_acc", "steps_per_s", "epoch_time_s"]
+METRIC_FIELDS = ["epoch", "lr", "train_loss", "train_acc", "val_loss", "val_acc", *STAT_FIELDS, *GPU_FIELDS, "steps_per_s", "epoch_time_s"]
 
 
 @torch.no_grad()
@@ -56,17 +47,6 @@ def evaluate(model, dl, device) -> tuple[float, float]:
         correct += (logits.argmax(1) == y).sum()
         n += len(y)
     return total_loss.item() / n, correct.item() / n
-
-
-def git_commit() -> str | None:
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
-        ).stdout.strip()
-        dirty = subprocess.run(["git", "status", "--porcelain"], cwd=REPO_ROOT, capture_output=True, text=True)
-        return out + ("-dirty" if dirty.stdout.strip() else "")
-    except (OSError, subprocess.CalledProcessError):
-        return None
 
 
 def plot_curves(rows: list[dict], path: Path) -> None:
@@ -119,12 +99,7 @@ def main(cfg: Config):
     device = get_device()
     print(f"Using device: {device}")
 
-    run_dir = RUNS_ROOT / datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir.mkdir(parents=True, exist_ok=False)
-    (run_dir / "config.json").write_text(
-        json.dumps({"config": cfg.to_dict(), "git_commit": git_commit(), "device": str(device)}, indent=2)
-    )
-    print(f"Run directory: {run_dir}")
+    run_dir = new_run_dir("digitnet", cfg.to_dict(), device, dev=cfg.dev)
 
     train_dl, val_dl, test_dl = make_loaders(cfg, device)
 
@@ -137,15 +112,15 @@ def main(cfg: Config):
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=cfg.lr, total_steps=cfg.epochs * len(train_dl))
 
-    rows: list[dict] = []
     best_val_acc, best_epoch = -1.0, 0
-    with open(run_dir / "metrics.csv", "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=METRIC_FIELDS)
-        writer.writeheader()
+    stats = ParamStats(model, every=100)  # gradient / weight statistics, see zoo.train.ParamStats
+    gpu = GpuMonitor(device)
+    global_step = 0
+    with MetricsLogger(run_dir / "metrics.csv", METRIC_FIELDS) as logger:
+        rows = logger.rows
 
         for epoch in range(1, cfg.epochs + 1):
-            t0 = time.perf_counter()
-            t_log, n_log = t0, 0  # window for the rolling steps/s
+            tp = Throughput()  # rolling steps/s window
             lr = sched.get_last_lr()[0]
             model.train()
             # Accumulate on device; only sync with .item() every `log_every` steps.
@@ -159,7 +134,10 @@ def main(cfg: Config):
                 loss = F.cross_entropy(logits, y)
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
+                global_step += 1
+                stats.grads(global_step)
                 opt.step()
+                stats.stepped(global_step)
                 sched.step()
 
                 loss_sum += loss.detach() * len(y)
@@ -167,13 +145,12 @@ def main(cfg: Config):
                 seen += len(y)
                 if step % cfg.log_every == 0:
                     mean_loss = loss_sum.item() / seen  # syncs the device, so the timing below is real
-                    now = time.perf_counter()
-                    steps_per_s_now = (step - n_log) / (now - t_log)
-                    t_log, n_log = now, step
+                    steps_per_s_now = tp.tick(step)
                     pbar.set_postfix(loss=f"{mean_loss:.4f}", steps_per_s=f"{steps_per_s_now:.1f}")
 
             loss_sum.item()  # sync the device so the timing below covers all training work
-            steps_per_s = len(train_dl) / (time.perf_counter() - t0)
+            steps_per_s = tp.rate(len(train_dl))
+            train_stats, gpu_stats = stats.read()[0], gpu.read()  # read before validation, so both cover training only
             val_loss, val_acc = evaluate(model, val_dl, device)
             row = {
                 "epoch": epoch,
@@ -182,12 +159,12 @@ def main(cfg: Config):
                 "train_acc": correct.item() / seen,
                 "val_loss": val_loss,
                 "val_acc": val_acc,
+                **train_stats,
+                **gpu_stats,
                 "steps_per_s": steps_per_s,
-                "epoch_time_s": time.perf_counter() - t0,
+                "epoch_time_s": tp.elapsed(),
             }
-            rows.append(row)
-            writer.writerow(row)
-            f.flush()
+            logger.log(row)
             print(
                 f"epoch {epoch}: train_loss={row['train_loss']:.4f} train_acc={row['train_acc']:.4f} "
                 f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} ({row['steps_per_s']:.1f} steps/s, {row['epoch_time_s']:.1f}s)"
