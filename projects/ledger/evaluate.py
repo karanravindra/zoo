@@ -27,7 +27,6 @@ import json
 import os
 import random
 import shutil
-import sys
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -38,9 +37,8 @@ from typing import Literal
 import tyro
 from tqdm import tqdm
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import CACHE_ROOT, CONFIGS, build_messages, PROCEDURAL, SYNTHETIC, convert_row, hub_sha, new_run_dir, parse_json_object, sample_indices  # noqa: E402
-from scoring import anls, gold_number, is_null, relaxed_accuracy, score_extraction  # noqa: E402
+from common import CACHE_ROOT, CONFIGS, build_messages, PROCEDURAL, SYNTHETIC, convert_row, hub_sha, new_ledger_run, parse_json_object, sample_indices
+from scoring import anls, gold_number, is_null, relaxed_accuracy, score_extraction
 
 PROTOCOL = "ledger-eval-v1"  # bump when inputs (prompts, OCR, image encoding) change, to invalidate the cache
 DOCVQA = "lmms-lab-encoder/DocVQA"
@@ -390,10 +388,7 @@ def summarize(rows: list[dict]) -> dict:
 
 
 def plot_scores(results: dict, path: Path, title: str) -> None:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    from zoo.plot import plt
 
     names = list(results)
     vals = [results[n]["field_score"] for n in names]
@@ -422,7 +417,7 @@ def main(cfg: EvalConfig):
         extra["tesseract"] = str(pytesseract.get_tesseract_version())
     if cfg.backend in ("local", "openai"):
         extra["model"] = backend.meta
-    run_dir = new_run_dir("eval", cfg, {"local": "cuda:0", "openai": cfg.base_url}.get(cfg.backend, "remote"), **extra)
+    run_dir = new_ledger_run("eval", cfg, {"local": "cuda:0", "openai": cfg.base_url}.get(cfg.backend, "remote"), **extra)
     (run_dir / "sample_ids.json").write_text(json.dumps({n: [e["id"] for e in exs] for n, (exs, _, _) in loaded.items()}, indent=1))
 
     # Every request from every set goes to the backend at once, so a server never drains between sets.

@@ -13,7 +13,7 @@ The project does two things:
   [tasksource/synthetic-extraction](https://huggingface.co/datasets/tasksource/synthetic-extraction).
 - **Evaluate** Clairic and our model on the same held-out test examples, with the same scoring.
 
-Needs a CUDA GPU. Run from anywhere with `uv run`. `flash-linear-attention` (Triton) provides the Gated-DeltaNet
+Needs a CUDA GPU. Run from anywhere with `uv run --group ledger` (the `ledger` dependency group holds the ledger-only packages: peft, bitsandbytes, accelerate, flash-linear-attention, pytesseract, rapidfuzz, requests). `flash-linear-attention` (Triton) provides the Gated-DeltaNet
 kernels. Without it, transformers falls back to a PyTorch reference that is about 3x slower. `causal-conv1d` isn't
 installed, so its PyTorch fallback is used.
 
@@ -26,7 +26,7 @@ installed, so its PyTorch fallback is used.
 `vllm/` is a separate uv project for the vLLM server. vLLM 0.33 pins torch 2.14 and transformers <5.21, which
 clash with the repo's environment.
 
-Modules: `common.py` (dataset conversion, prompt, label masking, run dirs), `model.py` (loading the model and
+Modules: `common.py` (dataset conversion, prompt, label masking, run dir wrapper over `zoo.runs.new_run_dir`), `model.py` (loading the model and
 adapter, greedy generation), `scoring.py` (metrics).
 
 ## Workflow
@@ -34,17 +34,17 @@ adapter, greedy generation), `scoring.py` (metrics).
 ```bash
 # 1. Check the data without loading the model: token lengths, over-length rejections per source,
 #    and one example's supervised span.
-uv run projects/ledger/train.py --data-only
+uv run --group ledger projects/ledger/train.py --data-only
 
 # 2. First training run: 20 optimizer steps, then check peak memory (printed, and in results.json)
 #    and the predictions in preview.jsonl.
-uv run projects/ledger/train.py --max-steps 20
+uv run --group ledger projects/ledger/train.py --max-steps 20
 
 # 3. Full run (1 epoch, about 6.9k examples, effective batch 16 = 8 x 2 accumulation, about 430 steps).
-uv run projects/ledger/train.py
+uv run --group ledger projects/ledger/train.py
 
 # 4. Merge the adapter for serving.
-uv run projects/ledger/merge_adapter.py --adapter runs/ledger/train/<run>/adapter
+uv run --group ledger projects/ledger/merge_adapter.py --adapter runs/ledger/train/<run>/adapter
 
 # 5. Serve a model with vLLM (continuous batching, paged attention, CUDA graphs), in its own env.
 #    Base: Qwen/Qwen3.5-0.8B --revision <sha from adapter/ledger.json>.  Fine-tuned: runs/ledger/train/<run>/merged
@@ -54,9 +54,9 @@ uv run --project projects/ledger/vllm vllm serve runs/ledger/train/<run>/merged 
     --mm-processor-kwargs '{"size": {"shortest_edge": 262144, "longest_edge": 524288}}'
 
 # 6. Evaluate against the server (all backends use the same seeded test examples).
-uv run projects/ledger/evaluate.py --backend openai
+uv run --group ledger projects/ledger/evaluate.py --backend openai
 export CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_AUTH_TOKEN=...
-uv run projects/ledger/evaluate.py --backend clairic
+uv run --group ledger projects/ledger/evaluate.py --backend clairic
 ```
 
 Don't pass `-O0` to `vllm serve`. In vLLM 0.33 it also disables CUDA graphs, and eager decoding of a 0.8B model
@@ -154,3 +154,16 @@ field correct). Runs: base `eval/20261113-231922`, fine-tuned `eval/20261113-232
   about 1.1 GB to download.
 - `--compile` follows the repo convention (`model.compile(mode="reduce-overhead", dynamic=False)`). Sequence
   lengths vary from example to example, so it recompiles often. Expect it to help little here.
+
+## Dev runs
+
+Pass `train.py` `--dev` to try a change without logging anything: the usual outputs go to a temporary directory that is deleted
+when the script exits, so the run never appears under `runs/`.
+
+## Training diagnostics in metrics.csv
+
+Besides the columns above, every row has gradient and GPU columns (blank where a value was not measured):
+
+- `grad_norm` is the one the Hugging Face Trainer reports; the other gradient columns are not logged here.
+- `gpu_util` (mean %), `gpu_mem_gb` (peak device memory), `gpu_alloc_gb` (peak memory torch allocated),
+  `gpu_reserved_gb`, `gpu_power_w` (mean), `gpu_temp_c` (peak), sampled in the background while training.

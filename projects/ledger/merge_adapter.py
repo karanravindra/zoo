@@ -9,14 +9,11 @@ saved weight names match the base checkpoint on the Hub, so vLLM's loader sees t
 from __future__ import annotations
 
 import json
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import tyro
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from model import load_for_inference  # noqa: E402
+from model import load_for_inference
 
 
 @dataclass

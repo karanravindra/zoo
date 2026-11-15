@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import csv
 import json
-import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,8 +25,7 @@ import torch
 import tyro
 from transformers import Trainer, TrainerCallback, TrainingArguments
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (  # noqa: E402
+from common import (
     CONFIGS,
     MODEL,
     PROCEDURAL,
@@ -36,18 +34,19 @@ from common import (  # noqa: E402
     encode_example,
     hub_sha,
     load_extraction,
-    new_run_dir,
+    new_ledger_run,
     parse_json_object,
 )
-from model import ADAPTER_META, generate, load_model, load_processor  # noqa: E402
-from scoring import score_extraction  # noqa: E402
+from model import ADAPTER_META, generate, load_model, load_processor
+from scoring import score_extraction
 
-from zoo.utils.device import seed_everything  # noqa: E402
+from zoo.monitor import GPU_FIELDS, GpuMonitor
+from zoo.utils.device import seed_everything
 
 # Full-attention layers: q/k/v/o_proj. Gated-DeltaNet (linear attention) layers: in_proj_qkv, in_proj_z, out_proj
 # (the tiny per-head in_proj_a/b gates stay frozen). Every layer: gate/up/down_proj.
 LORA_PROJECTIONS = {"q_proj", "k_proj", "v_proj", "o_proj", "in_proj_qkv", "in_proj_z", "out_proj", "gate_proj", "up_proj", "down_proj"}
-METRIC_FIELDS = ["step", "epoch", "loss", "grad_norm", "learning_rate", "eval_loss", "eval_runtime"]
+METRIC_FIELDS = ["step", "epoch", "loss", "grad_norm", "learning_rate", "eval_loss", "eval_runtime", *GPU_FIELDS]
 
 
 @dataclass
@@ -81,6 +80,7 @@ class TrainConfig:
     max_new_tokens: int = 512  # generation cap for the preview
     data_only: bool = False  # only build the datasets and report token lengths / rejections, no model
     compile: bool = False  # model.compile(mode="reduce-overhead", dynamic=False)
+    dev: bool = False  # dev run: outputs go to a temporary directory deleted on exit, so nothing is logged to runs/
 
 
 def build_split(split: str, cfg: TrainConfig, revisions: dict[str, str]):
@@ -172,6 +172,7 @@ def tail_loss(outputs, labels: torch.Tensor, num_items_in_batch=None) -> torch.T
 class CsvLogger(TrainerCallback):
     def __init__(self, path: Path):
         self.path = path
+        self.gpu = GpuMonitor("cuda:0")  # utilisation, memory, power and temperature since the previous log row
         with path.open("w", newline="") as f:
             csv.DictWriter(f, METRIC_FIELDS).writeheader()
 
@@ -179,7 +180,7 @@ class CsvLogger(TrainerCallback):
         if not logs:
             return
         with self.path.open("a", newline="") as f:
-            csv.DictWriter(f, METRIC_FIELDS, extrasaction="ignore").writerow({"step": state.global_step, **logs})
+            csv.DictWriter(f, METRIC_FIELDS, extrasaction="ignore").writerow({"step": state.global_step, **logs, **self.gpu.read()})
 
 
 def show_masking(processor, row: dict) -> None:
@@ -222,7 +223,7 @@ def main(cfg: TrainConfig):
     if cfg.data_only:
         return
 
-    run_dir = new_run_dir("train", cfg, "cuda:0", revisions=revisions)
+    run_dir = new_ledger_run("train", cfg, "cuda:0", dev=cfg.dev, revisions=revisions)
     (run_dir / "sample_ids.json").write_text(json.dumps(
         {"train": list(train_ds["id"]), "validation": list(val_ds["id"]), "rejected": {"train": train_rejected, "validation": val_rejected}}, indent=1
     ))
