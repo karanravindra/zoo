@@ -66,6 +66,7 @@ class AEConfig(_Serializable):
     seed: int = 0
     deterministic: bool = True
     compile: bool = False  # torch.compile the model with mode="reduce-overhead" (CUDA graphs on GPU)
+    dev: bool = False  # dev run: outputs go to a temporary directory deleted on exit, so nothing is logged to runs/
     log_every: int = 200
 
     @property
@@ -103,6 +104,7 @@ class LDMConfig(_Serializable):
     seed: int = 0
     deterministic: bool = True
     compile: bool = False  # torch.compile the model with mode="reduce-overhead" (CUDA graphs on GPU)
+    dev: bool = False  # dev run: outputs go to a temporary directory deleted on exit, so nothing is logged to runs/
     log_every: int = 200
 
 

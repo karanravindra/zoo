@@ -6,7 +6,6 @@ Defaults to the latest ldm run's last.pt and the first 8 validation captions. Wr
 (one row per prompt) to `<repo>/runs/pixel_art/sample.png` unless `--out` is given.
 """
 
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,12 +13,13 @@ import torch
 import tyro
 from tyro.conf import Positional, UseAppendAction
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import RUNS_ROOT, latest_checkpoint, save_grid  # noqa: E402
-from ldm import load_ldm  # noqa: E402
-from pixel_data import load_test_captions  # noqa: E402
+from common import save_grid
+from ldm import load_ldm
+from pixel_data import load_test_captions
 
-from zoo.utils.device import get_device  # noqa: E402
+from zoo.paths import runs_root
+from zoo.runs import latest_checkpoint
+from zoo.utils.device import get_device
 
 
 @dataclass
@@ -30,14 +30,14 @@ class Args:
     steps: int | None = None
     guidance: float | None = None  # classifier-free guidance scale (1 = off)
     seed: int = 0
-    out: Path = RUNS_ROOT / "sample.png"
+    out: Path = runs_root("pixel_art") / "sample.png"
 
 
 def main():
     args = tyro.cli(Args, description=__doc__)
 
     device = get_device()
-    ckpt = Path(args.ckpt) if args.ckpt else latest_checkpoint("ldm", "last.pt")
+    ckpt = Path(args.ckpt) if args.ckpt else latest_checkpoint("pixel_art", "last.pt", stage="ldm")
     ldm = load_ldm(ckpt).to(device)
 
     prompts = args.prompt or load_test_captions()[:8]

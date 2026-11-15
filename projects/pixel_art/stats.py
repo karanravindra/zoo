@@ -32,19 +32,18 @@ from dataclasses import dataclass
 from multiprocessing import Pool
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pyarrow.parquet as pq
 from huggingface_hub import snapshot_download
 from PIL import Image
+import tyro
+
+from zoo.paths import runs_root
+from zoo.plot import plt
 
 REPO_ID = "Angais/pixel-art-atlas-1.4m"
-RUNS_ROOT = Path(__file__).resolve().parents[2] / "runs" / "pixel_art" / "stats"
+RUNS_ROOT = runs_root("pixel_art") / "stats"
 WORD = re.compile(r"[a-z0-9']+")
-import tyro
 
 # ---------------------------------------------------------------- per-shard image stats
 
