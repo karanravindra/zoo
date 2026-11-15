@@ -21,7 +21,7 @@ Run from anywhere with `uv run`. Every run writes to `<repo>/runs/pixel_art/<sta
 | `sample.py` | Draws sprites for `--prompt` captions from an ldm checkpoint (default: latest ldm run's `last.pt`); `--guidance` sets the classifier-free guidance scale. |
 
 Modules: `ldm.py` (configs, autoencoder, text encoder, denoiser, loss, sampler, checkpoints), `pixel_data.py` (cache, tokenizer, loaders),
-`common.py` (paths, metrics, run dirs, plots).
+`common.py` (the RGBA `save_grid`); run dirs, metrics.csv, plots, PSNR/SSIM (window 7 for 16x16 images) and EMA come from `zoo.runs`, `zoo.plot`, `zoo.metrics`, `zoo.train`.
 
 Notes:
 - The whole dataset (~1.4 GB as uint8) is held on the device, so there are no DataLoaders.
@@ -41,3 +41,19 @@ Notes:
 - `train_ae.py --hflip-prob p` mirrors each training sprite left-right with probability `p` (default 0). Val and
   test are never flipped, so val/test metrics measure the unflipped distribution. Not used for the LDM: sprites
   are mostly lit from the top-left, so flips would change the style it learns.
+
+## Dev runs
+
+Pass `train_ae.py` / `train_ldm.py` `--dev` to try a change without logging anything: the usual outputs go to a temporary directory that is deleted
+when the script exits, so the run never appears under `runs/`.
+
+## Training diagnostics in metrics.csv
+
+Besides the columns above, every row has gradient and GPU columns (blank where a value was not measured):
+
+- `grad_norm`, `grad_norm_max`: mean and largest global gradient norm (before clipping) since the previous row;
+  `clip_frac`: fraction of steps clipped, when the script clips.
+- `weight_norm`, `update_ratio` (size of one optimizer step relative to the weights), `grad_cos` (cosine between
+  consecutive steps' gradients: near 1 steady, near 0 noisy, negative oscillating), averaged over every 100th step.
+- `gpu_util` (mean %), `gpu_mem_gb` (peak device memory), `gpu_alloc_gb` (peak memory torch allocated),
+  `gpu_reserved_gb`, `gpu_power_w` (mean), `gpu_temp_c` (peak), sampled in the background while training.

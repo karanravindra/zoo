@@ -13,10 +13,7 @@ Each run gets its own directory, `<repo>/runs/pixel_art/ae/<timestamp>/`, contai
   recon.png      test sprites (top row) and their reconstructions (bottom row), on a checkerboard
 """
 
-import csv
 import json
-import sys
-import time
 from pathlib import Path
 
 import torch
@@ -24,14 +21,18 @@ import torch.nn.functional as F
 import tyro
 from torchinfo import summary
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import new_run_dir, plot_curves, psnr, save_grid, ssim  # noqa: E402
-from ldm import AEConfig, build_ae, load_ae, save_ae  # noqa: E402
-from pixel_data import CHANNELS, IMAGE_SIZE, load_data, to_pm1  # noqa: E402
+from common import save_grid
+from ldm import AEConfig, build_ae, load_ae, save_ae
+from pixel_data import CHANNELS, IMAGE_SIZE, load_data, to_pm1
 
-from zoo.utils.device import get_device, seed_everything  # noqa: E402
+from zoo.metrics import psnr, ssim
+from zoo.monitor import GPU_FIELDS, GpuMonitor
+from zoo.plot import plot_curves
+from zoo.runs import MetricsLogger, new_run_dir
+from zoo.train import STAT_FIELDS, ParamStats, Throughput
+from zoo.utils.device import get_device, seed_everything
 
-METRIC_FIELDS = ["epoch", "lr", "train_loss", "train_mse", "train_psnr", "val_mse", "val_mse_global", "val_psnr", "val_ssim", "grad_norm", "grad_norm_max", "clip_frac", "steps_per_s", "epoch_time_s"]
+METRIC_FIELDS = ["epoch", "lr", "train_loss", "train_mse", "train_psnr", "val_mse", "val_mse_global", "val_psnr", "val_ssim", *STAT_FIELDS, *GPU_FIELDS, "steps_per_s", "epoch_time_s"]
 
 
 @torch.no_grad()
@@ -51,7 +52,7 @@ def evaluate(model, images: torch.Tensor, idx: torch.Tensor | None, batch_size: 
         recon = model.to_image(model(x))
         se += F.mse_loss(recon, x, reduction="sum")
         psnr_sum += psnr(recon, x).sum()
-        ssim_sum += ssim(recon, x).sum()
+        ssim_sum += ssim(recon, x, size=7).sum()  # 16x16 images: 7px window, not 11
         se_global += F.mse_loss(model.to_image(model(x, 1.0)), x, reduction="sum")
     return {"mse": se.item() / (n * CHANNELS * IMAGE_SIZE**2), "mse_global": se_global.item() / (n * CHANNELS * IMAGE_SIZE**2), "psnr": psnr_sum.item() / n, "ssim": ssim_sum.item() / n}
 
@@ -67,7 +68,7 @@ def main(cfg: AEConfig):
     seed_everything(cfg.seed, deterministic=cfg.deterministic)
     device = get_device()
     print(f"Using device: {device}")
-    run_dir = new_run_dir("ae", cfg.to_dict(), device)
+    run_dir = new_run_dir("pixel_art", cfg.to_dict(), device, dev=cfg.dev, stage="ae")
 
     d = load_data(cfg.val_size, cfg.seed).to(device)  # the whole dataset lives on the device as uint8
     print(f"train {len(d.train_idx)}, val {len(d.val_idx)}, test {len(d.test_images)}")
@@ -82,15 +83,15 @@ def main(cfg: AEConfig):
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=cfg.lr, total_steps=cfg.epochs * steps_per_epoch)
     gen = torch.Generator(device=device).manual_seed(cfg.seed)
 
-    rows: list[dict] = []
     best_val, best_epoch = float("inf"), 0
-    with open(run_dir / "metrics.csv", "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=METRIC_FIELDS)
-        writer.writeheader()
+    stats = ParamStats(model, every=100)  # gradient / weight statistics, see zoo.train.ParamStats
+    gpu = GpuMonitor(device)
+    global_step = 0
+    with MetricsLogger(run_dir / "metrics.csv", METRIC_FIELDS) as logger:
+        rows = logger.rows
 
         for epoch in range(1, cfg.epochs + 1):
-            t0 = time.perf_counter()
-            t_log, n_log = t0, 0  # window for the rolling steps/s
+            tp = Throughput()  # rolling steps/s window
             lr = sched.get_last_lr()[0]
             model.train()
             perm = d.train_idx[torch.randperm(len(d.train_idx), device=device, generator=gen)]
@@ -112,7 +113,10 @@ def main(cfg: AEConfig):
                 gn_sum += gn
                 gn_max = torch.maximum(gn_max, gn)
                 n_clip += (gn > cfg.grad_clip) if cfg.grad_clip > 0 else 0
+                global_step += 1
+                stats.grads(global_step, gn, cfg.grad_clip)
                 opt.step()
+                stats.stepped(global_step)
                 sched.step()
 
                 loss_sum += loss.detach() * len(x)
@@ -122,13 +126,12 @@ def main(cfg: AEConfig):
                 seen += len(x)
                 if (step + 1) % cfg.log_every == 0:
                     mean_loss = loss_sum.item() / seen  # syncs the device, so the timing below is real
-                    now = time.perf_counter()
-                    steps_per_s_now = (step + 1 - n_log) / (now - t_log)
-                    t_log, n_log = now, step + 1
+                    steps_per_s_now = tp.tick(step + 1)
                     print(f"epoch {epoch}/{cfg.epochs} step {step + 1}/{steps_per_epoch}: train_loss={mean_loss:.5f} train_mse={mse_sum.item() / seen:.5f} train_psnr={psnr_sum.item() / seen:.2f}dB grad_norm={gn_sum.item() / (step + 1):.3f} (max {gn_max.item():.2f}) ({steps_per_s_now:.1f} steps/s)")
 
             loss_sum.item()  # sync the device so the timing below covers all training work
-            steps_per_s = steps_per_epoch / (time.perf_counter() - t0)
+            steps_per_s = tp.rate(steps_per_epoch)
+            train_stats, gpu_stats = stats.read()[0], gpu.read()  # read before validation, so both cover training only
             val = evaluate(model, d.images, d.val_idx, cfg.batch_size)
             val_mse = val["mse"]
             row = {
@@ -144,12 +147,12 @@ def main(cfg: AEConfig):
                 "grad_norm": gn_sum.item() / steps_per_epoch,
                 "grad_norm_max": gn_max.item(),
                 "clip_frac": n_clip.item() / steps_per_epoch,
+                **train_stats,
+                **gpu_stats,
                 "steps_per_s": steps_per_s,
-                "epoch_time_s": time.perf_counter() - t0,
+                "epoch_time_s": tp.elapsed(),
             }
-            rows.append(row)
-            writer.writerow(row)
-            f.flush()
+            logger.log(row)
             print(
                 f"epoch {epoch}: train_loss={row['train_loss']:.5f} train_mse={row['train_mse']:.5f} train_psnr={row['train_psnr']:.2f}dB val_mse={val_mse:.5f} val_mse_global={val['mse_global']:.5f} "
                 f"val_psnr={val['psnr']:.2f}dB val_ssim={val['ssim']:.4f} grad_norm={row['grad_norm']:.3f} (max {row['grad_norm_max']:.2f}, clipped {row['clip_frac']:.0%}) ({row['steps_per_s']:.1f} steps/s, {row['epoch_time_s']:.1f}s)"

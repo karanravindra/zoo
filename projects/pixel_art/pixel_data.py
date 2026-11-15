@@ -25,10 +25,12 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import tyro
+
+from zoo.paths import DATA_ROOT
 
 REPO_ID = "Angais/pixel-art-atlas-1.4m"
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CACHE_ROOT = REPO_ROOT / "data" / "cache" / "PixelArtAtlas"
+CACHE_ROOT = DATA_ROOT / "cache" / "PixelArtAtlas"
 
 IMAGE_SIZE = 16
 CHANNELS = 4  # RGBA
@@ -36,7 +38,6 @@ CHANNELS = 4  # RGBA
 PAD_ID, NULL_ID, UNK_ID = 0, 1, 2  # NULL is the "empty caption" used for classifier-free guidance
 SPECIALS = ["<pad>", "<null>", "<unk>"]
 WORD = re.compile(r"[a-z0-9']+")
-import tyro
 
 # --- tokenizer -------------------------------------------------------------------
 
