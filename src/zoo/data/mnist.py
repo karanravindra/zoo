@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from torchvision import datasets
 
-from zoo.data.base import ImageDataset
+from zoo.data.image import ImageDataset
 
 
 class MNIST(ImageDataset):

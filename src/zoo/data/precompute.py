@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 
 import zoo.data
-from zoo.data.base import ImageDataset
+from zoo.data.image import ImageDataset
 
 DATASETS: dict[str, type[ImageDataset]] = {
-    name: getattr(zoo.data, name) for name in zoo.data.__all__ if name != "ImageDataset"
+    name: obj
+    for name in zoo.data.__all__
+    if isinstance(obj := getattr(zoo.data, name), type) and issubclass(obj, ImageDataset) and obj is not ImageDataset
 }
 
 
