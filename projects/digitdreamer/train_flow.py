@@ -17,10 +17,7 @@ Each run gets its own directory, `<repo>/runs/digitdreamer/flow/<timestamp>/`, c
   samples.png    final sample grid
 """
 
-import csv
 import json
-import sys
-import time
 from copy import deepcopy
 from pathlib import Path
 
@@ -30,9 +27,8 @@ from torch.utils.data import DataLoader
 from torchinfo import summary
 from torchvision.utils import save_image
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import REPO_ROOT, latest_checkpoint, make_splits, new_run_dir, plot_curves, to_unit  # noqa: E402
-from dreamer import (  # noqa: E402
+from common import make_splits
+from dreamer import (
     LATENT_SIZE,
     Dreamer,
     FlowConfig,
@@ -43,10 +39,16 @@ from dreamer import (  # noqa: E402
     save_flow,
 )
 
-from zoo import data  # noqa: E402
-from zoo.utils.device import get_device, seed_everything  # noqa: E402
+from zoo import data
+from zoo.metrics import to_unit
+from zoo.monitor import GPU_FIELDS, GpuMonitor
+from zoo.paths import REPO_ROOT
+from zoo.plot import plot_curves
+from zoo.runs import MetricsLogger, latest_checkpoint, new_run_dir
+from zoo.train import STAT_FIELDS, ParamStats, Throughput, update_ema
+from zoo.utils.device import get_device, seed_everything
 
-METRIC_FIELDS = ["epoch", "lr", "train_loss", "val_loss", "steps_per_s", "epoch_time_s"]
+METRIC_FIELDS = ["epoch", "lr", "train_loss", "val_loss", *STAT_FIELDS, *GPU_FIELDS, "steps_per_s", "epoch_time_s"]
 SAMPLES_PER_CLASS = 10
 
 
@@ -76,14 +78,6 @@ def eval_loss(model, z, y, batch_size: int, seed: int = 0) -> float:
     return total / n
 
 
-@torch.no_grad()
-def update_ema(ema, model, decay: float) -> None:
-    for pe, pm in zip(ema.parameters(), model.parameters()):
-        pe.lerp_(pm, 1 - decay)
-    for be, bm in zip(ema.buffers(), model.buffers()):
-        be.copy_(bm)
-
-
 def save_samples(dreamer: Dreamer, num_classes: int, device, path: Path) -> None:
     """Rows are classes, columns are samples; the noise is fixed so epochs are comparable."""
     y = torch.arange(num_classes, device=device).repeat_interleave(SAMPLES_PER_CLASS)
@@ -99,11 +93,11 @@ def main(cfg: FlowConfig):
     device = get_device()
     print(f"Using device: {device}")
 
-    ae_path = REPO_ROOT / cfg.ae_ckpt if cfg.ae_ckpt else latest_checkpoint("ae", "best.pt")
+    ae_path = REPO_ROOT / cfg.ae_ckpt if cfg.ae_ckpt else latest_checkpoint("digitdreamer", "best.pt", stage="ae")
     ae, ae_cfg, _ = load_ae(ae_path)
     ae = ae.to(device).eval().requires_grad_(False)
     print(f"Autoencoder: {ae_path}")
-    run_dir = new_run_dir("flow", cfg.to_dict(), device, ae_ckpt=str(ae_path))
+    run_dir = new_run_dir("digitdreamer", cfg.to_dict(), device, dev=cfg.dev, stage="flow", ae_ckpt=str(ae_path))
     (run_dir / "samples").mkdir()
 
     # Encode with the same train/val split the AE saw, so the flow never trains on AE-val images.
@@ -135,15 +129,15 @@ def main(cfg: FlowConfig):
     # Dreamer wraps the EMA model, so previews and the final checkpoint use the EMA weights.
     dreamer = Dreamer(ema, ae, mean, std, cfg, ae_cfg).to(device)
 
-    rows: list[dict] = []
     best_val, best_epoch = float("inf"), 0
-    with open(run_dir / "metrics.csv", "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=METRIC_FIELDS)
-        writer.writeheader()
+    stats = ParamStats(model, every=100)  # gradient / weight statistics, see zoo.train.ParamStats
+    gpu = GpuMonitor(device)
+    global_step = 0
+    with MetricsLogger(run_dir / "metrics.csv", METRIC_FIELDS) as logger:
+        rows = logger.rows
 
         for epoch in range(1, cfg.epochs + 1):
-            t0 = time.perf_counter()
-            t_log, n_log = t0, 0  # window for the rolling steps/s
+            tp = Throughput()  # rolling steps/s window
             lr = sched.get_last_lr()[0]
             model.train()
             perm = torch.randperm(len(z_train), device=device, generator=gen)
@@ -159,7 +153,10 @@ def main(cfg: FlowConfig):
                 loss = rectified_flow_loss(model, z, y, torch.randn(z.shape, device=device, generator=gen))
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
+                global_step += 1
+                stats.grads(global_step)
                 opt.step()
+                stats.stepped(global_step)
                 sched.step()
                 update_ema(ema, model, cfg.ema_decay)
 
@@ -167,25 +164,24 @@ def main(cfg: FlowConfig):
                 seen += len(y)
                 if (step + 1) % cfg.log_every == 0:
                     mean_loss = loss_sum.item() / seen  # syncs the device, so the timing below is real
-                    now = time.perf_counter()
-                    steps_per_s_now = (step + 1 - n_log) / (now - t_log)
-                    t_log, n_log = now, step + 1
+                    steps_per_s_now = tp.tick(step + 1)
                     print(f"epoch {epoch}/{cfg.epochs} step {step + 1}/{steps_per_epoch}: train_loss={mean_loss:.4f} ({steps_per_s_now:.1f} steps/s)")
 
             loss_sum.item()  # sync the device so the timing below covers all training work
-            steps_per_s = steps_per_epoch / (time.perf_counter() - t0)
+            steps_per_s = tp.rate(steps_per_epoch)
+            train_stats, gpu_stats = stats.read()[0], gpu.read()  # read before validation, so both cover training only
             val_loss = eval_loss(ema, z_val, y_val, cfg.batch_size)
             row = {
                 "epoch": epoch,
                 "lr": lr,
                 "train_loss": loss_sum.item() / seen,
                 "val_loss": val_loss,
+                **train_stats,
+                **gpu_stats,
                 "steps_per_s": steps_per_s,
-                "epoch_time_s": time.perf_counter() - t0,
+                "epoch_time_s": tp.elapsed(),
             }
-            rows.append(row)
-            writer.writerow(row)
-            f.flush()
+            logger.log(row)
             print(f"epoch {epoch}: train_loss={row['train_loss']:.4f} val_loss={val_loss:.4f} ({row['steps_per_s']:.1f} steps/s, {row['epoch_time_s']:.1f}s)")
             save_samples(dreamer, num_classes, device, run_dir / "samples" / f"epoch_{epoch:03d}.png")
             if val_loss < best_val:
