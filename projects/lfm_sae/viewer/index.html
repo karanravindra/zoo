@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SAE Features</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4f5f7;
+        --panel: #ffffff;
+        --well: #f0f1f4;
+        --hover: #eceef2;
+        --sel: #fff3df;
+        --rule: #e1e4e8;
+        --ink: #1a1d21;
+        --ink-2: #4b525c;
+        --ink-3: #8a919b;
+        --accent: #e8a33d;
+        --hl: 232 163 61;         /* activation highlight, rgb */
+        --link: #2f6fd6;
+        --top: #1b1e23;
+        --top-ink: #e9ecf0;
+        --top-ink-2: #9aa2ad;
+        --mono: "JetBrains Mono", ui-monospace, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --bg: #121418; --panel: #1a1d22; --well: #22262c; --hover: #262a31; --sel: #3a2f1c; --rule: #2b3037;
+          --ink: #e6e9ed; --ink-2: #b0b7c1; --ink-3: #737b86; --link: #6ea2f5; --top: #0c0d10;
+        }
+      }
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #121418; --panel: #1a1d22; --well: #22262c; --hover: #262a31; --sel: #3a2f1c; --rule: #2b3037;
+        --ink: #e6e9ed; --ink-2: #b0b7c1; --ink-3: #737b86; --link: #6ea2f5; --top: #0c0d10;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body { background: var(--bg); color: var(--ink); font: 13px/1.45 Inter, system-ui, sans-serif; display: flex; flex-direction: column; }
+      button, input, select { font: inherit; color: inherit; }
+      header { background: var(--top); color: var(--top-ink); display: flex; align-items: center; gap: 16px; padding: 0 16px; height: 48px; flex: none; }
+      header h1 { font-size: 14px; font-weight: 600; margin: 0; white-space: nowrap; }
+      #saes { display: flex; gap: 4px; }
+      #saes button { background: transparent; border: 1px solid #3a414a; color: var(--top-ink-2); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+      #saes button.on { background: var(--accent); border-color: var(--accent); color: #1b1e23; font-weight: 600; }
+      #stats { color: var(--top-ink-2); font-size: 12px; display: flex; gap: 14px; overflow: hidden; white-space: nowrap; }
+      #stats b { color: var(--top-ink); font-weight: 500; }
+      #tabs { margin-left: auto; display: flex; gap: 2px; }
+      #tabs button { background: none; border: 0; color: var(--top-ink-2); padding: 14px 10px; cursor: pointer; border-bottom: 2px solid transparent; }
+      #tabs button.on { color: var(--top-ink); border-bottom-color: var(--accent); }
+      main { flex: 1; display: flex; min-height: 0; }
+      #side { width: 380px; flex: none; border-right: 1px solid var(--rule); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+      #filters { padding: 10px; border-bottom: 1px solid var(--rule); display: grid; gap: 8px; }
+      #q { width: 100%; padding: 7px 10px; border: 1px solid var(--rule); border-radius: 6px; background: var(--well); }
+      .row2 { display: flex; gap: 8px; align-items: center; }
+      .row2 select { flex: 1; padding: 5px; border: 1px solid var(--rule); border-radius: 6px; background: var(--well); }
+      .row2 label { display: flex; gap: 5px; align-items: center; color: var(--ink-2); white-space: nowrap; }
+      #cats { display: flex; flex-wrap: wrap; gap: 4px; }
+      .chip { border: 1px solid var(--rule); background: var(--well); border-radius: 999px; padding: 2px 8px; font-size: 11px; cursor: pointer; color: var(--ink-2); }
+      .chip.on { border-color: var(--accent); background: var(--sel); color: var(--ink); }
+      .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: 0; }
+      #count { color: var(--ink-3); font-size: 11px; }
+      #list { flex: 1; overflow-y: auto; position: relative; }
+      #list .item { position: absolute; left: 0; right: 0; height: 44px; padding: 5px 10px; border-bottom: 1px solid var(--rule); cursor: pointer; overflow: hidden; }
+      #list .item:hover { background: var(--hover); }
+      #list .item.sel { background: var(--sel); }
+      .item .l1 { display: flex; gap: 8px; align-items: baseline; }
+      .item .id { font-family: var(--mono); font-size: 11px; color: var(--ink-3); width: 46px; flex: none; }
+      .item .lab { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+      .item .lab.none { color: var(--ink-3); font-weight: 400; font-family: var(--mono); font-size: 12px; }
+      .item .fq { font-size: 11px; color: var(--ink-3); flex: none; }
+      .item .l2 { font-size: 11px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 54px; font-family: var(--mono); }
+      #view { flex: 1; overflow-y: auto; min-width: 0; }
+      #detail { padding: 20px 24px; max-width: 1100px; }
+      .muted { color: var(--ink-3); }
+      .h { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+      .h h2 { margin: 0; font-size: 20px; font-weight: 600; }
+      .h .idbig { font-family: var(--mono); color: var(--ink-3); font-size: 15px; }
+      .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--well); border: 1px solid var(--rule); color: var(--ink-2); }
+      .expl { color: var(--ink-2); margin: 8px 0 0; max-width: 800px; }
+      .kv { display: flex; gap: 22px; margin: 14px 0; flex-wrap: wrap; }
+      .kv div { display: grid; }
+      .kv span { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em; }
+      .kv b { font-weight: 500; font-size: 15px; font-variant-numeric: tabular-nums; }
+      h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-3); margin: 22px 0 8px; font-weight: 600; }
+      .toks { display: flex; flex-wrap: wrap; gap: 4px; }
+      .tok { font-family: var(--mono); font-size: 12px; padding: 1px 6px; border-radius: 4px; background: var(--well); border: 1px solid var(--rule); white-space: pre; }
+      .tok.up { border-color: #2f9e6a66; }
+      .tok.down { border-color: #d6454566; }
+      .ex { display: grid; grid-template-columns: 54px 16px 1fr; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--rule); align-items: start; }
+      .ex .a { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+      .ex .s { font-size: 10px; color: var(--ink-3); padding-top: 2px; }
+      .ex .t { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; color: var(--ink-2); }
+      .ex .t mark { color: var(--ink); background: rgb(var(--hl) / var(--a)); border-radius: 3px; padding: 0 1px; font-weight: 500; }
+      .ex .t .nl { color: var(--ink-3); }
+      .nbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+      .nb { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; }
+      .nb h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; }
+      .nb a { display: grid; grid-template-columns: 46px 40px 1fr; gap: 6px; padding: 3px 0; color: inherit; text-decoration: none; cursor: pointer; font-size: 12px; }
+      .nb a:hover { color: var(--link); }
+      .nb .c { font-family: var(--mono); color: var(--ink-3); font-size: 11px; }
+      .nb .w { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #mapwrap { position: relative; height: 100%; }
+      #map { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
+      #maptip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 6px 8px; font-size: 12px; max-width: 320px; box-shadow: 0 8px 20px -8px rgb(0 0 0 / .4); display: none; }
+      #maplegend { position: absolute; left: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; font-size: 11px; display: grid; gap: 2px; }
+      #mapctl { position: absolute; right: 12px; top: 12px; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 6px 8px; font-size: 12px; }
+      #notes { padding: 20px 24px; max-width: 900px; }
+      #notes pre { white-space: pre-wrap; font: 13px/1.6 Inter, system-ui, sans-serif; }
+      .empty { padding: 40px; color: var(--ink-3); }
+      @media (max-width: 800px) {
+        main { flex-direction: column; }
+        #side { width: 100%; height: 45%; border-right: 0; border-bottom: 1px solid var(--rule); }
+        #stats { display: none; }
+        #detail { padding: 16px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>SAE features</h1>
+      <div id="saes"></div>
+      <div id="stats"></div>
+      <div id="tabs">
+        <button data-tab="feature" class="on">Feature</button>
+        <button data-tab="map">Map</button>
+        <button data-tab="notes">Notes</button>
+      </div>
+    </header>
+    <main>
+      <aside id="side">
+        <div id="filters">
+          <input id="q" placeholder="Search labels, tokens, ids…  (e.g. code, stroke, 1234)" />
+          <div class="row2">
+            <select id="sort">
+              <option value="labeled">Labeled first</option>
+              <option value="freq-desc">Most frequent</option>
+              <option value="freq-asc">Rarest</option>
+              <option value="max-desc">Highest activation</option>
+              <option value="id">Id</option>
+            </select>
+            <label><input type="checkbox" id="onlyLabeled" /> labeled only</label>
+          </div>
+          <div id="cats"></div>
+          <div id="count"></div>
+        </div>
+        <div id="list"></div>
+      </aside>
+      <section id="view">
+        <div id="detail"></div>
+        <div id="mapwrap" hidden>
+          <canvas id="map"></canvas>
+          <div id="maptip"></div>
+          <div id="maplegend"></div>
+          <div id="mapctl">
+            <label>Color <select id="mapcolor"><option value="category">category</option><option value="freq">frequency</option></select></label>
+          </div>
+        </div>
+        <div id="notes" hidden></div>
+      </section>
+    </main>
+    <script type="module" src="./app.ts"></script>
+  </body>
+</html>
