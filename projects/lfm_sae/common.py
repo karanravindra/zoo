@@ -1,16 +1,12 @@
-"""Shared bits for lfm_sae: the model id, run dirs, hook names, and reading activation shards."""
+"""Shared bits for lfm_sae: the model id, hook names, and reading activation shards."""
 
 from __future__ import annotations
 
 import json
-import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
 import torch
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNS_ROOT = REPO_ROOT / "runs" / "lfm_sae"
 
 MODEL = "LiquidAI/LFM3-VL-2B"
 MODEL_REVISION = "23387beda43c60310348e83e25f78f33c3140d3a"  # pinned: the checkpoint runs its own modeling code
@@ -18,13 +14,6 @@ MODEL_REVISION = "23387beda43c60310348e83e25f78f33c3140d3a"  # pinned: the check
 
 def hook_name(site: str, layer: int) -> str:
     return f"{site}.{layer}"
-
-
-def git_commit() -> str | None:
-    try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
 
 
 def hub_sha(repo: str, repo_type: str = "dataset") -> str:
