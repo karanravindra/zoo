@@ -43,12 +43,12 @@ from sklearn.metrics import average_precision_score, precision_recall_curve
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from tyro.conf import UseAppendAction
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from embed import DATA_ROOT, DEFAULT_MODEL, latent_dir, load_embeddings  # noqa: E402
-from image_index import image_ids, image_root, labels_file, read_tags, rejections_file, sync_index  # noqa: E402
-from kmeans import RUNS_ROOT  # noqa: E402
+from embed import DEFAULT_MODEL, latent_dir, load_embeddings
+from image_index import image_ids, image_root, labels_file, read_tags, rejections_file, sync_index
+from kmeans import RUNS_ROOT
 
-from zoo.data import stargan  # noqa: E402
+from zoo.data import stargan
+from zoo.paths import DATA_ROOT
 
 
 def pick_threshold(y: np.ndarray, p: np.ndarray, target: float) -> tuple[float | None, float, float]:

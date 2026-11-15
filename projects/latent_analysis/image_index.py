@@ -29,9 +29,10 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from embed import DATA_ROOT, REPO_ROOT
 from kmeans import RUNS_ROOT
+
 from zoo.data import stargan
+from zoo.paths import DATA_ROOT, REPO_ROOT
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 

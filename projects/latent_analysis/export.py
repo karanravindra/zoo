@@ -35,12 +35,12 @@ import tyro
 from PIL import Image
 from tqdm import tqdm
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from embed import DATA_ROOT, DEFAULT_MODEL, REPO_ROOT, latent_dir, load_embeddings  # noqa: E402
-from image_index import image_ids, image_root, labels_file, sync_index  # noqa: E402
-from kmeans import RUNS_ROOT, paths_key, write_cluster_json  # noqa: E402
+from embed import DEFAULT_MODEL, latent_dir, load_embeddings
+from image_index import image_ids, image_root, labels_file, sync_index
+from kmeans import RUNS_ROOT, paths_key, write_cluster_json
 
-from zoo.data import stargan  # noqa: E402
+from zoo.data import stargan
+from zoo.paths import DATA_ROOT, REPO_ROOT
 
 
 def make_thumb(src: Path, dst: Path, size: int) -> None:

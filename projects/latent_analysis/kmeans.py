@@ -19,28 +19,23 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 import tyro
+from embed import DEFAULT_MODEL, latent_dir, load_embeddings
+from emeans import EMeans
 from PIL import Image
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from embed import DATA_ROOT, DEFAULT_MODEL, REPO_ROOT, latent_dir, load_embeddings  # noqa: E402
-from emeans import EMeans  # noqa: E402
+from zoo.data import stargan
+from zoo.paths import DATA_ROOT, REPO_ROOT, runs_root
+from zoo.plot import plt
+from zoo.utils.device import seed_everything
 
-from zoo.data import stargan  # noqa: E402
-from zoo.utils.device import seed_everything  # noqa: E402
-
-RUNS_ROOT = REPO_ROOT / "runs" / "latent_analysis"
+RUNS_ROOT = runs_root("latent_analysis")
 
 
 def kmeans_pp_init(x: torch.Tensor, k: int, gen: torch.Generator) -> torch.Tensor:
