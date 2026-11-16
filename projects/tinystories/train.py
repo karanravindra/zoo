@@ -178,7 +178,8 @@ def train(cfg: Config, progress: dict):
     progress["run_dir"] = run_dir
 
     model = build_model(cfg).to(device)
-    summary(model, input_size=(cfg.batch_size, cfg.block_size), dtypes=[torch.long], device=device, depth=2)
+    summary(model, input_size=(1, cfg.block_size),  # batch 1: only the layer table is wanted, and uncompiled FlexAttention falls back to dense scores
+        dtypes=[torch.long], device=device, depth=2)
     if cfg.compile:
         model.compile(mode="reduce-overhead", dynamic=False)  # in place, so state_dict keys and checkpoints are unchanged
 
@@ -354,7 +355,11 @@ def run(cfg: Config) -> None:
     progress: dict = {}
     try:
         train(cfg, progress)
-    except torch.OutOfMemoryError as e:
+    except (torch.OutOfMemoryError, RuntimeError) as e:
+        oom = e if isinstance(e, torch.OutOfMemoryError) else e.__cause__  # torchinfo wraps errors from the forward pass
+        if not isinstance(oom, torch.OutOfMemoryError):
+            raise
+        e = oom
         if not cfg.auto_batch or progress.get("checkpoints"):
             raise
         if progress.get("run_dir") and not cfg.dev:  # a dev run's directory is removed on exit anyway
