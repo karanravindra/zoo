@@ -7,7 +7,7 @@ loss against the three budgets a run can be compared at: training time, training
 The loss is `val_doc_loss` (whole stories from their start, comparable across the document options) when every run
 has it, else `val_loss`; `--metric` picks one. FLOPs come from the `flops` column of metrics.csv, or for runs from before it existed from tokens times the config's
 `train_flops_per_token`, which is the same number. Each run is labelled
-by the config values that differ between the runs (e.g. `dim=256, lr=0.001`), and the runs are ordered by those
+by the config values that differ between the runs in a short form (e.g. `ctx2048 d512 win512 mask`; the legend sits below the panels), and the runs are ordered by those
 values (numerically where they are numbers), so a sweep reads in order. Runs still training (no `results.json`
 yet) are included, scored by their best eval row so far; runs with no eval row yet are skipped.
 """
@@ -23,12 +23,15 @@ from tyro.conf import Positional
 
 from zoo.paths import runs_root
 from zoo.plot import plt
-from zoo.runs import diff_labels, load_run, read_metrics, sort_runs
+from zoo.runs import load_run, read_metrics, sort_runs, varying_keys
 
 RUNS_ROOT = runs_root("tinystories")
 
 # Config keys that do not change what was trained, so they never label a run.
-IGNORE_KEYS = {"run_name", "log_every", "sample_every", "sample_prompt", "sample_tokens", "sample_temperature", "sample_top_k"}
+IGNORE_KEYS = {"grad_accum", "run_name", "log_every", "sample_every", "sample_prompt", "sample_tokens", "sample_temperature", "sample_top_k"}
+# Short names for the config keys in a legend label; a bool shows as its name when True and not at all when False.
+ALIASES = {"dim": "d", "block_size": "ctx", "n_heads": "h", "attn_window": "win", "attn_global_every": "g", "batch_size": "bs",
+           "doc_mask": "mask", "doc_align": "align", "n_layers": "L", "lr": "lr"}
 X_LABELS = {"step": "step", "tokens": "training tokens", "elapsed_s": "training time (s)", "flops": "training FLOPs"}
 
 
@@ -46,6 +49,10 @@ def load(run: Path) -> dict:
     r = load_run(run)
     cfg = Config.from_dict(r["config"])
     r["config"] = asdict(cfg)  # fills keys that older runs lack with today's defaults
+    # An OOM restart splits the batch and accumulates (same tokens per step), and a FLOP budget fixes max_steps: neither is a difference between runs
+    r["config"]["batch_size"] = cfg.batch_size * cfg.grad_accum
+    if cfg.flop_budget > 0 and cfg.time_budget_s <= 0:
+        r["config"]["max_steps"] = None
     r["params"] = sum(p.numel() for p in build_model(cfg).parameters())
     m = r["metrics"]
     if "flops" not in m:  # runs from before the column existed: the count is analytic, so it can be rebuilt
@@ -59,6 +66,28 @@ def set_best(r: dict, metric: str) -> None:
     evals = [i for i, v in enumerate(m[metric]) if not math.isnan(v)]  # newer runs also log rows between evals
     best = min(evals, key=lambda i: m[metric][i])
     r["best"] = {k: v[best] for k, v in m.items()}
+
+
+def short_labels(runs: list[dict]) -> list[str]:
+    """One compact label per run from the config keys that differ, e.g. `ctx2048 d512 win512 mask`."""
+    keys = varying_keys(runs, IGNORE_KEYS)
+    if "dim" in keys:  # n_heads follows dim in a width sweep, so it only adds noise
+        keys = [k for k in keys if k != "n_heads"]
+    order = {k: i for i, k in enumerate(["block_size", "batch_size", "dim", "n_heads", "attn_window", "attn_global_every", "doc_mask", "doc_align"])}
+    keys = sorted(keys, key=lambda k: order.get(k, len(order)))  # the same reading order in every label
+    labels = []
+    for r in runs:
+        parts = []
+        for k in keys:
+            v, a = r["config"].get(k), ALIASES.get(k, k)
+            if isinstance(v, bool):
+                parts += [a] if v else []
+            elif v in (None, 0, "off"):  # off / unset: nothing to say
+                continue
+            else:
+                parts.append(f"{a}{v}" if isinstance(v, (int, float)) else f"{a}={v}" if k != "doc_align" else v)
+        labels.append(" ".join(parts) or "baseline")
+    return labels
 
 
 def has_rows(run: Path) -> bool:
@@ -75,7 +104,7 @@ def main(args: Args):
     if not dirs:
         raise SystemExit("no runs with at least one eval row")
     runs = sort_runs([load(d) for d in dirs], IGNORE_KEYS)  # legend/colour/table order: by the config values that differ
-    labels = diff_labels(runs, IGNORE_KEYS)
+    labels = short_labels(runs)
     metric = args.metric
     if metric == "auto":
         metric = "val_doc_loss" if all("val_doc_loss" in r["metrics"] for r in runs) else "val_loss"
@@ -86,9 +115,9 @@ def main(args: Args):
     name = {"val_loss": "Val loss", "val_doc_loss": "Val loss per story"}[metric]
     for r in runs:
         set_best(r, metric)
-    colors = [f"C{i % 10}" for i in range(len(runs))]
+    colors = [plt.cm.tab20(i % 20) for i in range(len(runs))]
 
-    fig, ax = plt.subplots(3, 2, figsize=(13, 13))  # 3 rows x 2 columns on a square figure
+    fig, ax = plt.subplots(3, 2, figsize=(13, 14))  # 3 rows x 2 columns, with room below for the legend
     panels = [  # (x column, y column, title)
         ("elapsed_s", metric, f"{name} vs training time"),
         ("flops", metric, f"{name} vs training FLOPs"),
@@ -105,7 +134,6 @@ def main(args: Args):
         if args.log_x:
             a.set_xscale("log")
         a.grid(alpha=0.3)
-    ax[0, 0].legend(fontsize=7)
 
     bars = ax[2, 1]
     xs = list(range(len(runs)))
@@ -113,15 +141,17 @@ def main(args: Args):
     bars.bar(xs, vals, color=colors)
     bars.set_title(f"Best {bpb.replace('_', ' ')} (hatched: still training)")
     bars.set_xticks(xs)
-    bars.set_xticklabels([r["name"] for r in runs], fontsize=8, rotation=30, ha="right")  # short: config labels overlap
+    bars.set_xticklabels(labels, fontsize=8, rotation=45, ha="right")
     for patch, r, x, v in zip(bars.patches, runs, xs, vals):
         if r["results"] is None:
             patch.set_hatch("//")
-        bars.text(x, v, f"{v:.4f}", ha="center", va="bottom", fontsize=8)
+        bars.text(x, v, f"{v:.4f}", ha="center", va="bottom", fontsize=7)
     bars.set_ylim(min(vals) * 0.95, max(vals) * 1.03)
 
     fig.suptitle("TinyStories runs")
-    fig.tight_layout()
+    handles = [plt.Line2D([], [], c=c, lw=2) for c in colors]
+    fig.legend(handles, labels, loc="lower center", ncol=min(len(runs), 4), fontsize=9, frameon=False)  # shared, below the panels
+    fig.tight_layout(rect=(0, 0.01 + 0.014 * math.ceil(len(runs) / 4), 1, 1))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.out, dpi=130)
     plt.close(fig)
