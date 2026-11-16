@@ -31,7 +31,7 @@ Files:
 - `compare.py`: compare runs (default: all under `runs/tinystories`, or pass run dirs). The top row is val loss
   against training time, training FLOPs and `--x step|tokens|elapsed_s|flops`; below are train loss, tokens/s and a
   best-val-bpb bar chart, plus a table with parameter counts and the time and FLOPs each run took. Runs are labelled
-  by the config values that differ and ordered by them; runs still training are included. `--log-x` for log x axes. The loss shown is `val_doc_loss` when every run has it,
+  by the config values that differ, in short form (`ctx2048 bs64 d512 win512 g5 mask`), in one legend below the panels (batch splits from OOM restarts and a FLOP budget's `max_steps` don't count as differences), and ordered by them; runs still training are included. `--log-x` for log x axes. The loss shown is `val_doc_loss` when every run has it,
   else `val_loss` (`--metric` picks one).
 
 ## Dependencies
