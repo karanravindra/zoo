@@ -12,6 +12,7 @@ uv run projects/tinystories/prepare.py   # once: download, train the tokenizer, 
 uv run projects/tinystories/train.py
 uv run projects/tinystories/sample.py --prompt "Once upon a time"
 uv run projects/tinystories/compare.py                    # all runs side by side -> runs/tinystories/comparison.png
+uv run projects/tinystories/bench.py                      # zero-shot benchmarks of every run -> runs/tinystories/benchmarks.csv
 ```
 
 Files:
@@ -33,6 +34,8 @@ Files:
   best-val-bpb bar chart, plus a table with parameter counts and the time and FLOPs each run took. Runs are labelled
   by the config values that differ, in short form (`ctx2048 bs64 d512 win512 g5 mask`), in one legend below the panels (batch splits from OOM restarts and a FLOP budget's `max_steps` don't count as differences), and ordered by them; runs still training are included. `--log-x` for log x axes. The loss shown is `val_doc_loss` when every run has it,
   else `val_loss` (`--metric` picks one).
+- `bench.py`: zero-shot benchmarks (see "Benchmarks"), for every run or the run dirs passed. Writes `bench.json` into each
+  run dir and `runs/tinystories/benchmarks.csv`, and prints a table with the chance level and a standard error.
 
 ## Dependencies
 
@@ -82,9 +85,32 @@ it, and `-2`, `-3`, ... is appended rather than writing into an existing directo
 | `grads.png` | gradient norm and update-to-weight ratio against step (log scale) |
 | `bpb.png` | train and val bits per byte against step |
 | `samples.txt` | one text sample every `--sample-every` steps and at the final step, from a fixed seed |
+| `stories.txt` | not written by `train.py`: 50 whole new stories from `best.pt`, made with `sample.py --prompt "" --num-samples 50 --max-tokens 512 --out <run>/stories.txt` (temperature 0.8, top-k 40, seed 0) |
+| `bench.json` | not written by `train.py`: the run's `bench.py` scores, per task `n`, `acc`, `acc_stderr` (and `acc_norm`, or lambada `ppl`), plus blimp per phenomenon and per subset |
 
 Checkpoints are self-describing (weights plus the config that built them): `llama.load_checkpoint(path)` returns a
 ready model.
+
+## Benchmarks
+
+`bench.py` scores checkpoints zero-shot on the usual small-model tasks, with the lm-evaluation-harness conventions but
+no dependency on it: `blimp` (67 grammatical minimal-pair subsets, also averaged per phenomenon), `hellaswag`,
+`lambada` (last-word greedy accuracy and its perplexity), `piqa`, `arc_easy`, `arc_challenge`, `winogrande`, `sciq`,
+`openbookqa` and `copa`. The datasets are downloaded from the Hugging Face Hub on first use. A candidate text is scored by
+the sum of its token log-probabilities after the context; `acc` takes the highest, `acc_norm` divides by the length in
+characters (the table shows `acc_norm` for hellaswag, arc_challenge and openbookqa, `acc` for the rest).
+
+Every sequence starts with the end-of-text token and runs in fp32 (`--bf16` for autocast); a context that does not
+fit the block size is cut from the left. A windowed model (`--attn-window`) is run through the KV-cache priming pass,
+which applies the window with plain SDPA, because FlexAttention without compile runs out of memory on long rows
+(it matches the training forward to 1e-5). The scorer reproduces the training `val_doc_loss` to within 0.006 nats per token.
+
+A model trained on TinyStories alone has seen almost none of these tasks' text: the 12-32M-parameter runs score a few
+points above chance on hellaswag, piqa and arc_easy, around 12-14% on lambada, and at or below chance on the rest. The
+gaps between runs are within a couple of standard errors (`acc_stderr` in `benchmarks.csv`) on everything except
+`blimp`, whose 67k pairs separate the runs by about 3 points (stderr 0.2); the small tasks (copa has 100 examples) and
+lambada's perplexity (heavy-tailed) are noise for comparing runs, and so is the `avg` column. `--limit N` is for a quick
+check and writes nothing.
 
 ## Dev runs
 
