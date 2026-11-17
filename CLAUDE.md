@@ -35,6 +35,7 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
 
 - Each run writes to `runs/<project>/<timestamp>/` (gitignored; a script can pass `name=` to `new_run_dir` for a descriptive directory name instead, as tinystories does): `config.json` (config plus git commit and device), `metrics.csv`, `best.pt` / `last.pt` checkpoints, and `results.json`.
 - `runs/` is a symlink to `/mnt/ai/zoo/runs` (the big disk); use it through the symlink.
+- `data/` (`DATA_ROOT`: token caches and the like) is a symlink to `/mnt/ai/zoo/data` for the same reason; the local disk is small. HF downloads already go to `/mnt/ai/data/hf` (`HF_HOME`).
 - Training scripts log `STAT_FIELDS` (from `ParamStats`) and `GPU_FIELDS` (from `GpuMonitor`) in `metrics.csv`. A column that is only measured on some rows is left blank on the others; `zoo.runs.read_metrics` reads blanks as nan and `plot_curves` skips them.
 - Save plots as PNG files. Never call `plt.show()`.
 
