@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from numpy.lib.format import open_memmap
+from tqdm import tqdm
 
 
 def write_token_corpus(
@@ -34,17 +35,20 @@ def write_token_corpus(
     out.mkdir(parents=True, exist_ok=True)
     dtype = np.dtype(np.uint16 if vocab_size <= 2**16 else np.uint32)
     raw, n, n_items = out / "tokens.raw.tmp", 0, 0
-    with open(raw, "wb") as f:  # length is unknown up front, so stream to a flat file first
-        for seq in sequences:
+    with open(raw, "wb") as f, tqdm(desc=f"{split}: write", unit="tok", unit_scale=True) as bar:
+        for seq in sequences:  # length is unknown up front, so stream to a flat file first
             a = np.asarray(seq, dtype=np.int64)
             if len(a) and (a.min() < 0 or a.max() >= vocab_size):
                 raise ValueError(f"token id outside [0, {vocab_size})")
             f.write(a.astype(dtype).tobytes())
             n, n_items = n + len(a), n_items + 1
+            bar.update(len(a))
     flat = np.memmap(raw, dtype=dtype, mode="r", shape=(n,)) if n else np.empty(0, dtype)
     arr = open_memmap(out / "tokens.npy", mode="w+", dtype=dtype, shape=(n,))
-    for i in range(0, n, chunk):
-        arr[i : i + chunk] = flat[i : i + chunk]
+    with tqdm(total=n, desc=f"{split}: copy", unit="tok", unit_scale=True) as bar:
+        for i in range(0, n, chunk):
+            arr[i : i + chunk] = flat[i : i + chunk]
+            bar.update(min(chunk, n - i))
     arr.flush()
     del arr, flat
     os.remove(raw)
