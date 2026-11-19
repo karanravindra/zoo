@@ -61,7 +61,7 @@ from torch.utils.data import DataLoader, IterableDataset
 from common import MODEL, MODEL_REVISION, hook_name, hub_sha
 
 from zoo.paths import runs_root
-from zoo.runs import git_commit
+from zoo.runs import git_commit, tee_console
 
 Site = Literal["resid_post", "mixer_out", "mlp_out"]
 SOURCES = ("web", "chat")
@@ -441,6 +441,7 @@ def setup_run(cfg: Config) -> tuple[Config, Path]:
     """(config, run dir). A new run dir under data_root, symlinked from runs/lfm_sae/extract/, or the resumed one."""
     if cfg.resume is not None:
         run = cfg.resume.resolve()
+        tee_console(run)
         saved = config_from_json(json.loads((run / "config.json").read_text()))
         # runtime settings, not part of what the data depends on: taken from this command line
         saved.device, saved.compile = cfg.device, cfg.compile
@@ -452,6 +453,7 @@ def setup_run(cfg: Config) -> tuple[Config, Path]:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run = cfg.data_root / "extract" / stamp
     run.mkdir(parents=True)
+    tee_console(run)
     link = runs_root("lfm_sae") / "extract" / stamp
     link.parent.mkdir(parents=True, exist_ok=True)
     link.symlink_to(run, target_is_directory=True)

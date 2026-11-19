@@ -49,7 +49,7 @@ from sae import TopKSAE
 from zoo.monitor import GPU_FIELDS, GpuMonitor
 from zoo.paths import runs_root
 from zoo.plot import plt
-from zoo.runs import MetricsLogger, dev_run_dir, git_commit
+from zoo.runs import MetricsLogger, dev_run_dir, git_commit, tee_console
 from zoo.train import STAT_FIELDS, ParamStats
 
 D_MODEL = extract.D_MODEL
@@ -321,6 +321,7 @@ def main(cfg: Config):
     else:
         run = runs_root("lfm_sae") / "train" / datetime.now().strftime("%Y%m%d-%H%M%S")
         run.mkdir(parents=True)
+    tee_console(run)
     device_name = torch.cuda.get_device_name() if cfg.device.startswith("cuda") else cfg.device
     (run / "config.json").write_text(json.dumps(
         {**asdict(cfg), "hook": hook, "git_commit": git_commit(), "device_name": device_name}, indent=2, default=str))
