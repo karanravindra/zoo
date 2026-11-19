@@ -7,6 +7,7 @@ import csv
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -37,13 +38,43 @@ def dev_run_dir(project: str) -> Path:
     return run_dir
 
 
+class _Tee:
+    """File-like that writes to the original stream and to the log file."""
+
+    def __init__(self, stream, log) -> None:
+        self._stream, self._log = stream, log
+
+    def write(self, text: str) -> int:
+        self._log.write(text)
+        self._log.flush()
+        return self._stream.write(text)
+
+    def flush(self) -> None:
+        self._log.flush()
+        self._stream.flush()
+
+    def __getattr__(self, name):  # isatty, fileno, encoding, ... (so tqdm and friends keep working)
+        return getattr(self._stream, name)
+
+
+def tee_console(run_dir: Path, name: str = "console.log") -> Path:
+    """Copy everything printed to stdout and stderr from now on into `<run_dir>/console.log` (appended, so a
+    resumed run keeps its earlier output). `new_run_dir` calls this; call it yourself for hand-made run dirs."""
+    path = Path(run_dir) / name
+    log = open(path, "a", buffering=1)
+    atexit.register(log.close)
+    sys.stdout, sys.stderr = _Tee(sys.stdout, log), _Tee(sys.stderr, log)
+    return path
+
+
 def new_run_dir(
     project: str, config: dict, device, stage: str | None = None, dev: bool = False, name: str | None = None, **extra
 ) -> Path:
     """Create `runs/<project>[/<stage>]/<timestamp>/` and write config.json (config, git commit, device, extras).
 
     `name` replaces the timestamp as the directory name; if that directory already exists, `-2`, `-3`, ... is
-    appended, so an existing run is never written into. With `dev`, the directory is a `dev_run_dir` instead."""
+    appended, so an existing run is never written into. With `dev`, the directory is a `dev_run_dir` instead.
+    Console output (stdout and stderr) is also saved to `console.log` in the run directory."""
     if dev:
         run_dir = dev_run_dir(project)
     else:
@@ -55,6 +86,7 @@ def new_run_dir(
         run_dir.mkdir(parents=True, exist_ok=False)
     meta = {"config": config, "git_commit": git_commit(), "device": str(device), **extra}
     (run_dir / "config.json").write_text(json.dumps(meta, indent=2))
+    tee_console(run_dir)
     print(f"Run directory: {run_dir}")
     return run_dir
 

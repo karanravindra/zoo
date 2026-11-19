@@ -12,7 +12,7 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
 
 - Code reused across projects goes in `src/zoo/`. Utilities only; training loops, scripts and models stay in the project.
   - `zoo.paths`: `REPO_ROOT`, `DATA_ROOT`, `runs_root(project)`.
-  - `zoo.runs`: `git_commit`, `new_run_dir(project, config, device, stage=None, dev=False, name=None, **extra)`, `dev_run_dir(project)`, `latest_checkpoint(project, name, stage=None)`, `MetricsLogger` (metrics.csv); `load_run`, `read_metrics`, `diff_labels`, `sort_runs` for a project's compare script.
+  - `zoo.runs`: `git_commit`, `new_run_dir(project, config, device, stage=None, dev=False, name=None, **extra)`, `dev_run_dir(project)`, `tee_console(run_dir)`, `latest_checkpoint(project, name, stage=None)`, `MetricsLogger` (metrics.csv); `load_run`, `read_metrics`, `diff_labels`, `sort_runs` for a project's compare script.
   - `zoo.plot`: `plot_curves(rows, series, path, x="epoch")`; importing it selects the Agg backend (`from zoo.plot import plt`).
   - `zoo.metrics`: `to_unit`, `psnr`, `ssim` (images in [-1, 1]; pass `size=7` for 16x16), bits-per-byte for text.
   - `zoo.train`: `update_ema`, `Throughput` (steps/s timing), `ParamStats` (gradient norm, clipping, weight norm, update ratio, gradient direction; `STAT_FIELDS`).
@@ -33,7 +33,7 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
 
 ## Run outputs
 
-- Each run writes to `runs/<project>/<timestamp>/` (gitignored; a script can pass `name=` to `new_run_dir` for a descriptive directory name instead, as tinystories does): `config.json` (config plus git commit and device), `metrics.csv`, `best.pt` / `last.pt` checkpoints, and `results.json`.
+- Each run writes to `runs/<project>/<timestamp>/` (gitignored; a script can pass `name=` to `new_run_dir` for a descriptive directory name instead, as tinystories does): `config.json` (config plus git commit and device), `console.log` (everything printed to stdout/stderr; `new_run_dir` sets it up), `metrics.csv`, `best.pt` / `last.pt` checkpoints, and `results.json`.
 - `runs/` is a symlink to `/mnt/ai/zoo/runs` (the big disk); use it through the symlink.
 - `data/` (`DATA_ROOT`: token caches and the like) is a symlink to `/mnt/ai/zoo/data` for the same reason; the local disk is small. HF downloads already go to `/mnt/ai/data/hf` (`HF_HOME`).
 - Training scripts log `STAT_FIELDS` (from `ParamStats`) and `GPU_FIELDS` (from `GpuMonitor`) in `metrics.csv`. A column that is only measured on some rows is left blank on the others; `zoo.runs.read_metrics` reads blanks as nan and `plot_curves` skips them.
