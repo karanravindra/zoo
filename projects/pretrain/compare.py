@@ -3,13 +3,15 @@
 `uv run projects/pretrain/compare.py [run_dir ...] [--x tokens] [--out PATH]`
 
 Defaults to every run under `<repo>/runs/pretrain` and writes `comparison.png` next to them. The top row is val
-loss against the three budgets a run can be compared at: training time, training FLOPs, and `--x` (steps by default).
-The loss is `val_doc_loss` (whole stories from their start, comparable across the document options) when every run
-has it, else `val_loss`; `--metric` picks one. FLOPs come from the `flops` column of metrics.csv, or for runs from before it existed from tokens times the config's
-`train_flops_per_token`, which is the same number. Each run is labelled
-by the config values that differ between the runs in a short form (e.g. `ctx2048 d512 win512 mask`; the legend sits below the panels), and the runs are ordered by those
-values (numerically where they are numbers), so a sweep reads in order. Runs still training (no `results.json`
-yet) are included, scored by their best eval row so far; runs with no eval row yet are skipped.
+loss against the three budgets a run can be compared at: training time, training FLOPs, and `--x` (steps by default;
+`--x tokens` compares runs with different batch sizes). The loss is `val_doc_loss` (whole stories from their start,
+comparable across the document options) when every run has it, else `val_loss`; `--metric` picks one. The val panels
+clip the steep start of the curves: their y axis ends just above the worst run's best value. FLOPs come from the `flops`
+column of metrics.csv, or for runs from before it existed from tokens times the config's `train_flops_per_token`, which
+is the same number. Runs are ordered by FLOP budget, then by the other config values that differ, and each is labelled
+with the budget and the differing values in a short form (e.g. `3e17 d640 L8 64k tok/step lr0.0008`; batch size is
+shown as tokens per step, 1k = 1024; the legend sits below the panels). Runs still training (no `results.json` yet) are
+included, scored by their best eval row so far; runs with no eval row yet are skipped.
 
 Runs trained on the story mix also log `val_<source>_bpb` (train.py's per-source validation). When any run has them, a
 second figure, `comparison_sources.png` next to the first, shows every run's bits per byte on each source at its best
@@ -26,23 +28,24 @@ from llama import Config, build_model
 from tyro.conf import Positional
 
 from zoo.paths import runs_root
-from zoo.plot import plt
+from zoo.plot import plt, time_unit
 from zoo.runs import load_run, read_metrics, sort_runs, varying_keys
 
 RUNS_ROOT = runs_root("pretrain")
 
 # Config keys that do not change what was trained, so they never label a run.
-IGNORE_KEYS = {"grad_accum", "run_name", "log_every", "sample_every", "sample_prompt", "sample_tokens", "sample_temperature", "sample_top_k", "val_source_batches"}
+IGNORE_KEYS = {"grad_accum", "run_name", "log_every", "sample_every", "sample_prompt", "sample_tokens", "sample_temperature", "sample_top_k", "val_source_batches",
+               "eval_every", "grad_checkpoint"}
 # Short names for the config keys in a legend label; a bool shows as its name when True and not at all when False.
 ALIASES = {"dim": "d", "block_size": "ctx", "n_heads": "h", "attn_window": "win", "attn_global_every": "g", "batch_size": "bs",
            "doc_mask": "mask", "doc_align": "align", "n_layers": "L", "lr": "lr"}
-X_LABELS = {"step": "step", "tokens": "training tokens", "elapsed_s": "training time (s)", "flops": "training FLOPs"}
+X_LABELS = {"step": "step", "tokens": "training tokens", "elapsed_s": "training time", "flops": "training FLOPs"}
 
 
 @dataclass
 class Args:
     runs: Positional[list[Path]] = field(default_factory=list)  # run dirs (default: all under runs/pretrain)
-    x: Literal["step", "tokens", "elapsed_s", "flops"] = "step"  # x axis of the third loss panel and the bottom row: optimizer steps, training tokens, seconds or FLOPs
+    x: Literal["step", "tokens", "elapsed_s", "flops"] = "step"  # x axis of the third loss panel and the bottom row: optimizer steps, training tokens, seconds or FLOPs (tokens compares runs with different batch sizes)
     metric: Literal["auto", "val_loss", "val_doc_loss"] = "auto"  # loss to plot and rank by: val_loss is measured the way each run trains; val_doc_loss scores whole stories from their start and is comparable across --doc-mask / --doc-align; auto = val_doc_loss when every run has it
     log_x: bool = False  # log-scale x axes, to see the early part of long runs
     out: Path = RUNS_ROOT / "comparison.png"
@@ -77,14 +80,18 @@ def short_labels(runs: list[dict]) -> list[str]:
     keys = varying_keys(runs, IGNORE_KEYS)
     if "dim" in keys:  # n_heads follows dim in a width sweep, so it only adds noise
         keys = [k for k in keys if k != "n_heads"]
-    order = {k: i for i, k in enumerate(["block_size", "batch_size", "dim", "n_heads", "attn_window", "attn_global_every", "doc_mask", "doc_align"])}
-    keys = sorted(keys, key=lambda k: order.get(k, len(order)))  # the same reading order in every label
+    order = {k: i for i, k in enumerate(["flop_budget", "block_size", "dim", "n_layers", "n_heads", "attn_window", "attn_global_every", "doc_mask", "doc_align", "batch_size", "lr"])}
+    keys = sorted(keys, key=lambda k: order.get(k, len(order)))  # the same reading order in every label: budget, architecture, then batch and lr
     labels = []
     for r in runs:
         parts = []
         for k in keys:
             v, a = r["config"].get(k), ALIASES.get(k, k)
-            if isinstance(v, bool):
+            if k == "flop_budget":
+                parts.append(fmt_budget(v) if v else "time budget")
+            elif k == "batch_size":  # sequences per step is not comparable across context lengths: show tokens per step
+                parts.append(f"{v * r['config']['block_size'] / 1024:.0f}k tok/step")  # 1k = 1024 tokens: 64k, not 66k
+            elif isinstance(v, bool):
                 parts += [a] if v else []
             elif v in (None, 0, "off"):  # off / unset: nothing to say
                 continue
@@ -92,6 +99,11 @@ def short_labels(runs: list[dict]) -> list[str]:
                 parts.append(f"{a}{v}" if isinstance(v, (int, float)) else f"{a}={v}" if k != "doc_align" else v)
         labels.append(" ".join(parts) or "baseline")
     return labels
+
+
+def fmt_budget(flops: float) -> str:
+    """`3e+17` -> `3e17`."""
+    return f"{flops:.0e}".replace("e+", "e")
 
 
 def source_names(runs: list[dict]) -> list[str]:
@@ -119,7 +131,7 @@ def plot_sources(runs: list[dict], labels: list[str], colors: list, names: list[
     ax.grid(axis="y", alpha=0.3)
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.08), ncol=min(len(runs), 4), fontsize=9, frameon=False)
     fig.tight_layout()
-    fig.savefig(path, dpi=130, bbox_inches="tight")
+    fig.savefig(path, dpi=260, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -137,6 +149,7 @@ def main(args: Args):
     if not dirs:
         raise SystemExit("no runs with at least one eval row")
     runs = sort_runs([load(d) for d in dirs], IGNORE_KEYS)  # legend/colour/table order: by the config values that differ
+    runs.sort(key=lambda r: r["config"].get("flop_budget") or 0)  # stable: the budget ladder first, the other differences within a budget
     labels = short_labels(runs)
     metric = args.metric
     if metric == "auto":
@@ -158,12 +171,19 @@ def main(args: Args):
         (args.x, "train_loss", "Train loss (nats/token)"),
         (args.x, "tokens_per_s", "Training tokens/s"),
     ]
+    t_unit, t_div = time_unit(max(max(r["metrics"]["elapsed_s"]) for r in runs))  # one unit for every time axis
+    x_labels = {**X_LABELS, "elapsed_s": f"training time ({t_unit})"}
+    # The val panels skip the steep start of the curves: the y range ends just above the worst run's best
+    best_vals = [r["best"][metric] for r in runs]
     for a, (x, key, title) in zip(ax.flat, panels):
+        div = t_div if x == "elapsed_s" else 1.0
         for run, label, c in zip(runs, labels, colors):
-            pts = [(u, v) for u, v in zip(run["metrics"][x], run["metrics"][key]) if not math.isnan(v)]  # skip blank cells
+            pts = [(u / div, v) for u, v in zip(run["metrics"][x], run["metrics"][key]) if not math.isnan(v)]  # skip blank cells
             a.plot([p[0] for p in pts], [p[1] for p in pts], c=c, label=label, marker="." if len(pts) < 3 else None, lw=1.2)
         a.set_title(title)
-        a.set_xlabel(X_LABELS[x])
+        a.set_xlabel(x_labels[x])
+        if key == metric:
+            a.set_ylim(min(best_vals) * 0.97, max(best_vals) * 1.12)
         if args.log_x:
             a.set_xscale("log")
         a.grid(alpha=0.3)
@@ -183,10 +203,11 @@ def main(args: Args):
 
     fig.suptitle("Pretrain runs")
     handles = [plt.Line2D([], [], c=c, lw=2) for c in colors]
-    fig.legend(handles, labels, loc="lower center", ncol=min(len(runs), 4), fontsize=9, frameon=False)  # shared, below the panels
-    fig.tight_layout(rect=(0, 0.01 + 0.014 * math.ceil(len(runs) / 4), 1, 1))
+    ncol = min(len(runs), 3)
+    fig.legend(handles, labels, loc="lower center", ncol=ncol, fontsize=9, frameon=False)  # shared, below the panels
+    fig.tight_layout(rect=(0, 0.01 + 0.014 * math.ceil(len(runs) / ncol), 1, 1))
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(args.out, dpi=130)
+    fig.savefig(args.out, dpi=260)
     plt.close(fig)
 
     w = max(len(r["name"]) for r in runs) + 2
