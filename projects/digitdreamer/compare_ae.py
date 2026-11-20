@@ -68,7 +68,7 @@ def main():
     fig.suptitle("DigitDreamer AE runs")
     fig.tight_layout()
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(args.out, dpi=130)
+    fig.savefig(args.out, dpi=260)
     plt.close(fig)
 
     print(f"{'run':<17}{'test_mse':>10}{'psnr':>8}{'ssim':>8}  config")

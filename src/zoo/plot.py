@@ -9,7 +9,16 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-__all__ = ["plt", "plot_curves"]
+__all__ = ["plt", "plot_curves", "time_unit"]
+
+
+def time_unit(max_seconds: float) -> tuple[str, float]:
+    """Unit name and its size in seconds for a time axis that runs up to `max_seconds`: s, min or h."""
+    if max_seconds >= 3 * 3600:
+        return "h", 3600.0
+    if max_seconds >= 3 * 60:
+        return "min", 60.0
+    return "s", 1.0
 
 
 def plot_curves(
