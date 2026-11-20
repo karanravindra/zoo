@@ -313,11 +313,13 @@ class Llama(nn.Module):
         temperature: float = 1.0,
         top_k: int | None = None,
         eos_id: int | None = None,
-        generator: torch.Generator | None = None,
+        generator: torch.Generator | list[torch.Generator] | None = None,
         hidden_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
         kv_cache: bool = True,
     ) -> torch.Tensor:
         """Append up to `max_new_tokens` sampled tokens to idx (B, T); temperature 0 is greedy.
+
+        `generator` may be a list with one generator per row.
 
         Stops early once every row has produced `eos_id`; a row that has finished is padded with `eos_id`. Only the
         last position's logits are computed.
@@ -350,7 +352,11 @@ class Llama(nn.Module):
                 if top_k is not None:
                     kth = logits.topk(min(top_k, logits.shape[-1])).values[:, -1:]
                     logits = logits.masked_fill(logits < kth, -float("inf"))
-                nxt = torch.multinomial(logits.softmax(-1), 1, generator=generator)
+                probs = logits.softmax(-1)
+                if isinstance(generator, list):  # one generator per row: a row's sample does not depend on the other rows in the batch
+                    nxt = torch.stack([torch.multinomial(p, 1, generator=g) for p, g in zip(probs, generator)])
+                else:
+                    nxt = torch.multinomial(probs, 1, generator=generator)
             if eos_id is not None:
                 nxt = nxt.masked_fill(done[:, None], eos_id)
                 done |= nxt[:, 0] == eos_id

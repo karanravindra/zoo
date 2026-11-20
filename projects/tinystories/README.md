@@ -28,7 +28,10 @@ Files:
 - `sample.py`: generate from a checkpoint (default: `best.pt` of the latest run). `--num-samples N` generates a batch,
   `--out FILE` also writes the samples to a file, and `--prompt ""` starts whole new stories from the end-of-text
   token. Generation uses a KV cache: one new token per step against cached keys / values, falling back to a
-  sliding window once the context reaches `block_size`.
+  sliding window once the context reaches `block_size`. `--prompts FILE` continues every prompt of a JSONL file
+  (`projects/pretrain/eval_prompts.jsonl`) and writes `{id, source, prompt, text, n_tokens, ended}` rows to `--out`
+  (default `<run>/eval_stories.jsonl`); `projects/pretrain/judge.py` uses this to compare a pretrain run with this
+  project's best model.
 - `compare.py`: compare runs (default: all under `runs/tinystories`, or pass run dirs). The top row is val loss
   against training time, training FLOPs and `--x step|tokens|elapsed_s|flops`; below are train loss, tokens/s and a
   best-val-bpb bar chart, plus a table with parameter counts and the time and FLOPs each run took. Runs are labelled

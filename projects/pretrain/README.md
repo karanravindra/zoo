@@ -21,6 +21,9 @@ uv run projects/pretrain/train.py
 uv run projects/pretrain/sample.py --prompt "Once upon a time"
 uv run projects/pretrain/compare.py                    # all runs side by side -> runs/pretrain/comparison.png
 uv run projects/pretrain/bench.py                      # zero-shot benchmarks of every run -> runs/pretrain/benchmarks.csv
+uv run projects/pretrain/make_prompts.py               # once: shared story openings -> projects/pretrain/eval_prompts.jsonl
+uv run projects/pretrain/sample.py <run>/best.pt --prompts projects/pretrain/eval_prompts.jsonl --max-tokens 512 --out <run>/eval_stories.jsonl   # per run, and the tinystories baseline with projects/tinystories/sample.py
+uv run --group pretrain projects/pretrain/judge.py     # Claude grades every run's stories -> runs/pretrain/story_eval_<judge>.csv / .png (an OpenAI model: --provider openai --judge <model id>)
 ```
 
 Files:
@@ -38,7 +41,8 @@ Files:
   with the TinyStories runs; the other sources' held-out stories are in `validation_<source>/`, which `train.py` scores
   at every eval. `--max-docs 2000` runs the whole pipeline on a few rows per source; `--vocab-size` must match `train.py`'s.
 - `train.py`: step-based loop (not epochs): random windows from `zoo.data.text.TokenDataset`, AdamW with weight decay on
-  2D parameters only, linear warmup then cosine LR, grad clipping, optional bf16 autocast on cuda, an eval every
+  2D parameters only, linear warmup then cosine LR, grad clipping, optional bf16 autocast on cuda, optional weight EMA (`--ema`, decay `--ema-decay`; evals, samples
+  and `best.pt`/`last.pt` then use the averaged weights, the optimizer keeps training the raw ones; the `train_*` and gradient columns of metrics.csv still come from the raw weights, so a train/val gap on an EMA run mixes two models), an eval every
   `--eval-every` steps over `--eval-batches` fixed val batches, and a text sample every `--sample-every` steps
   (independent of evals; 0 disables). Each eval also scores every source's held-out stories (`validation_<source>/`
   from `prepare.py`) with `--val-source-batches` batches each (0 skips them) and logs `val_<source>_loss` /
@@ -49,11 +53,34 @@ Files:
   token. Generation uses a KV cache: one new token per step against cached keys / values, falling back to a
   sliding window once the context reaches `block_size`.
 - `compare.py`: compare runs (default: all under `runs/pretrain`, or pass run dirs). The top row is val loss
-  against training time, training FLOPs and `--x step|tokens|elapsed_s|flops`; below are train loss, tokens/s and a
-  best-val-bpb bar chart, plus a table with parameter counts and the time and FLOPs each run took. Runs are labelled
-  by the config values that differ, in short form (`ctx2048 bs64 d512 win512 g5 mask`), in one legend below the panels (batch splits from OOM restarts and a FLOP budget's `max_steps` don't count as differences), and ordered by them; runs still training are included. `--log-x` for log x axes. The loss shown is `val_doc_loss` when every run has it,
-  else `val_loss` (`--metric` picks one). When any run has per-source columns, `comparison_sources.png` (next to the
-  first figure) and a table show each run's bits per byte on every source at its best eval row.
+  against training time, training FLOPs and `--x step|tokens|elapsed_s|flops` (`tokens` compares runs with different
+  batch sizes); the val panels clip the steep start of the curves. Below are train loss, tokens/s and a
+  best-val-bpb bar chart, plus a table with parameter counts and the time and FLOPs each run took. Runs are ordered by
+  FLOP budget, then by the config values that differ, and labelled in short form (`3e17 d640 L8 64k tok/step lr0.0008`;
+  batch size is tokens per step, 1k = 1024; batch splits from OOM restarts and a FLOP budget's `max_steps` don't count as
+  differences), in one legend below the panels; runs still training are included. `--log-x` for log x axes. The loss shown
+  is `val_doc_loss` when every run has it, else `val_loss` (`--metric` picks one). When any run has per-source columns,
+  `comparison_sources.png` (next to the first figure) and a table show each run's bits per byte on every source at its
+  best eval row.
+- `bench_memory.py`: speed and peak memory of the 1e18 / 3e18 run configs for each micro-batch size, with and without
+  `--grad-checkpoint` (see "Batch size and GPU memory"). Writes `runs/pretrain/memory_bench.csv`.
+- `make_prompts.py`: writes `eval_prompts.jsonl` (committed): the first sentence of 100 held-out TinyStories stories
+  plus 10 from each other source's held-out split, so every model continues the same openings. Each row is
+  `{id, source, prompt, reference}`; `reference` (the rest of the story) is only for a human spot check.
+- `judge.py`: grades the `eval_stories.jsonl` files that `sample.py --prompts` wrote (the same flag exists in
+  `projects/tinystories/sample.py`, so the top TinyStories run is the baseline) with Claude through the Batches API.
+  `--mode abs` scores grammar, coherence, plot and creativity 1-10; `--mode pairwise` compares each run's story with the
+  baseline's for the same prompt in both orders and reports a win rate. Both are reported separately for TinyStories
+  openings (in-domain) and the other sources (out-of-domain), with the share of stories that ended within the token
+  limit. `--judge` picks the grader (default `claude-haiku-5-5`), `--subset 0.2 --judge claude-sonnet-5-5
+  --compare-judge claude-haiku-5-5` re-grades a stratified fifth with a stronger model and prints the agreement,
+  `--dry-run` prints the request count and calls nothing. Grades are cached per run, so reruns only grade what is
+  missing. Needs `ANTHROPIC_API_KEY` (or `ant auth login`). `--provider ollama --judge lfm3:latest` grades with a local Ollama model (schema-constrained JSON, temperature 0, nothing
+  billed) and `--provider d3 --judge d3:9b` asks the d3 decision model for A / B / tie probabilities (comparisons only; 4096-token
+  context). Each judge's report is `story_eval_<judge>.csv` / `.png`. `--provider openai --judge <model id>` grades with an
+  OpenAI model through its Batch API instead (Chat Completions, strict JSON schema; `--reasoning-effort` is sent only
+  when set) and needs an `OPENAI_API_KEY` with API billing, which a ChatGPT subscription does not include. Both
+  packages are in the `pretrain` uv group.
 - `bench.py`: zero-shot benchmarks (see "Benchmarks"), for every run or the run dirs passed. Writes `bench.json` into each
   run dir and `runs/pretrain/benchmarks.csv`, and prints a table with the chance level and a standard error.
 
@@ -106,6 +133,8 @@ it, and `-2`, `-3`, ... is appended rather than writing into an existing directo
 | `bpb.png` | train and val bits per byte against step |
 | `samples.txt` | one text sample every `--sample-every` steps and at the final step, from a fixed seed |
 | `stories.txt` | not written by `train.py`: 50 whole new stories from `best.pt`, made with `sample.py --prompt "" --num-samples 50 --max-tokens 512 --out <run>/stories.txt` (temperature 0.8, top-k 40, seed 0) |
+| `eval_stories.jsonl` | not written by `train.py`: one story per `eval_prompts.jsonl` prompt from `best.pt` (`{id, source, prompt, text, n_tokens, ended}`), made with `sample.py --prompts` (temperature 0.8, top-k 40, seed 0) |
+| `judge_<judge>_abs.jsonl`, `judge_<judge>_pairwise.jsonl` | not written by `train.py`: cached `judge.py` grades per story (scores and a one-line comment) or per comparison (winner and reason) |
 | `bench.json` | not written by `train.py`: the run's `bench.py` scores, per task `n`, `acc`, `acc_stderr` (and `acc_norm`, or lambada `ppl`), plus blimp per phenomenon and per subset |
 
 Checkpoints are self-describing (weights plus the config that built them): `llama.load_checkpoint(path)` returns a
@@ -197,6 +226,19 @@ step stay the same, so the FLOPs per step, the step count of a FLOP budget and t
 saved config records the batch size that was used. Each failed attempt costs one start-up (model build and compile).
 An out-of-memory error after the first checkpoint is not retried. `--no-auto-batch` runs in a single process and
 fails on the first error.
+
+`--grad-checkpoint` is the other way to fit: each block's activations are recomputed in the backward pass instead of
+stored (`torch.utils.checkpoint`, non-reentrant), which costs about a third more compute per step and leaves the
+results unchanged (gradients match to the last bit on CPU). Whether that beats a smaller micro-batch depends on how
+much a small batch slows the kernels down, so measure it:
+
+```
+uv run projects/pretrain/bench_memory.py --compile
+```
+
+It runs every (micro-batch, checkpointing) case of both run configs in its own process at fixed sequences per step,
+and prints tokens/s, peak allocated and reserved memory and the hours the whole FLOP budget would take. The
+`--grad-checkpoint` flag does not change the run name, and `compare.py` does not count it as a config difference.
 
 ## Comparing at equal compute
 
