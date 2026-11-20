@@ -22,7 +22,7 @@ from llama import Config, build_model
 from tyro.conf import Positional
 
 from zoo.paths import runs_root
-from zoo.plot import plt
+from zoo.plot import plt, time_unit
 from zoo.runs import load_run, read_metrics, sort_runs, varying_keys
 
 RUNS_ROOT = runs_root("tinystories")
@@ -32,7 +32,7 @@ IGNORE_KEYS = {"grad_accum", "run_name", "log_every", "sample_every", "sample_pr
 # Short names for the config keys in a legend label; a bool shows as its name when True and not at all when False.
 ALIASES = {"dim": "d", "block_size": "ctx", "n_heads": "h", "attn_window": "win", "attn_global_every": "g", "batch_size": "bs",
            "doc_mask": "mask", "doc_align": "align", "n_layers": "L", "lr": "lr"}
-X_LABELS = {"step": "step", "tokens": "training tokens", "elapsed_s": "training time (s)", "flops": "training FLOPs"}
+X_LABELS = {"step": "step", "tokens": "training tokens", "elapsed_s": "training time", "flops": "training FLOPs"}
 
 
 @dataclass
@@ -125,12 +125,15 @@ def main(args: Args):
         (args.x, "train_loss", "Train loss (nats/token)"),
         (args.x, "tokens_per_s", "Training tokens/s"),
     ]
+    t_unit, t_div = time_unit(max(max(r["metrics"]["elapsed_s"]) for r in runs))  # one unit for every time axis
+    x_labels = {**X_LABELS, "elapsed_s": f"training time ({t_unit})"}
     for a, (x, key, title) in zip(ax.flat, panels):
+        div = t_div if x == "elapsed_s" else 1.0
         for run, label, c in zip(runs, labels, colors):
-            pts = [(u, v) for u, v in zip(run["metrics"][x], run["metrics"][key]) if not math.isnan(v)]  # skip blank cells
+            pts = [(u / div, v) for u, v in zip(run["metrics"][x], run["metrics"][key]) if not math.isnan(v)]  # skip blank cells
             a.plot([p[0] for p in pts], [p[1] for p in pts], c=c, label=label, marker="." if len(pts) < 3 else None, lw=1.2)
         a.set_title(title)
-        a.set_xlabel(X_LABELS[x])
+        a.set_xlabel(x_labels[x])
         if args.log_x:
             a.set_xscale("log")
         a.grid(alpha=0.3)
@@ -153,7 +156,7 @@ def main(args: Args):
     fig.legend(handles, labels, loc="lower center", ncol=min(len(runs), 4), fontsize=9, frameon=False)  # shared, below the panels
     fig.tight_layout(rect=(0, 0.01 + 0.014 * math.ceil(len(runs) / 4), 1, 1))
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(args.out, dpi=130)
+    fig.savefig(args.out, dpi=260)
     plt.close(fig)
 
     w = max(len(r["name"]) for r in runs) + 2
