@@ -38,7 +38,9 @@ from their start, each token from its own story only, and are the columns to com
 Memory: the saved activations grow with batch_size * block_size * dim, so a wide model with a long context may not
 fit at the default batch size. With `--auto-batch` (the default) a run that hits a CUDA out-of-memory error before its
 first checkpoint is restarted in a fresh process with the micro-batch halved and `grad_accum` doubled, as often as
-needed; tokens per optimizer step, and so the step count of a FLOP budget, do not change.
+needed; tokens per optimizer step, and so the step count of a FLOP budget, do not change. `--grad-checkpoint`
+recomputes each block's activations in the backward pass instead (less memory, about a third more compute);
+`bench_memory.py` measures which of the two is faster for a config.
 
 `flops` is an analytic count of training FLOPs (see `Config.train_flops_per_token` in llama.py), so runs of different
 model sizes can be compared at equal compute. `--flop-budget 3e16` trains for the number of steps that fit that budget
@@ -46,6 +48,7 @@ model sizes can be compared at equal compute. `--flop-budget 3e16` trains for th
 has passed, with the cosine following elapsed time (with --compile, compilation counts against it).
 """
 
+import copy
 import itertools
 import json
 import math
@@ -68,7 +71,7 @@ from zoo.monitor import GPU_FIELDS, GpuMonitor
 from zoo.paths import DATA_ROOT
 from zoo.plot import plot_curves
 from zoo.runs import MetricsLogger, new_run_dir
-from zoo.train import STAT_FIELDS, ParamStats, Throughput
+from zoo.train import STAT_FIELDS, ParamStats, Throughput, update_ema
 from zoo.utils.device import get_device, seed_everything
 
 CACHE_ROOT = DATA_ROOT / "cache" / "pretrain"
@@ -224,8 +227,12 @@ def train(cfg: Config, progress: dict):
     model = build_model(cfg).to(device)
     summary(model, input_size=(1, cfg.block_size),  # batch 1: only the layer table is wanted, and uncompiled FlexAttention falls back to dense scores
         dtypes=[torch.long], device=device, depth=2)
+    ema = copy.deepcopy(model).requires_grad_(False) if cfg.ema else None
     if cfg.compile:
         model.compile(mode="reduce-overhead", dynamic=False)  # in place, so state_dict keys and checkpoints are unchanged
+        if ema is not None:
+            ema.compile(mode="reduce-overhead", dynamic=False)
+    scored = ema if ema is not None else model  # the weights that are evaluated, sampled and saved
 
     decay = [p for p in model.parameters() if p.dim() >= 2]
     no_decay = [p for p in model.parameters() if p.dim() < 2]
@@ -282,6 +289,8 @@ def train(cfg: Config, progress: dict):
             stats.grads(step, norm, cfg.grad_clip)
             opt.step()
             stats.stepped(step)
+            if ema is not None:
+                update_ema(ema, model, min(cfg.ema_decay, (1 + step) / (10 + step)))
             n_window += 1
 
             # The time check reads the clock without a device sync, so it can run a few queued steps late.
@@ -319,8 +328,8 @@ def train(cfg: Config, progress: dict):
             if do_eval or do_sample:
                 tp.pause()
             if do_eval:
-                val_loss = evaluate(model, val_ds, cfg, impl, amp, eot_id)
-                val_doc_loss = evaluate(model, val_ds, cfg, impl, amp, eot_id, per_story=True)
+                val_loss = evaluate(scored, val_ds, cfg, impl, amp, eot_id)
+                val_doc_loss = evaluate(scored, val_ds, cfg, impl, amp, eot_id, per_story=True)
                 row |= {
                     "val_loss": val_loss,
                     "val_bpb": bits_per_byte(val_loss, val_tokens, val_bytes),
@@ -328,7 +337,7 @@ def train(cfg: Config, progress: dict):
                     "val_doc_bpb": bits_per_byte(val_doc_loss, val_tokens, val_bytes),
                 }
                 if sources:
-                    row |= source_scores(model, val_sets, cfg, impl, amp, eot_id)
+                    row |= source_scores(scored, val_sets, cfg, impl, amp, eot_id)
                     if primary:  # `validation/` is that source's held-out set, already scored as val_loss
                         row |= {f"val_{primary}_loss": val_loss, f"val_{primary}_bpb": row["val_bpb"]}
                 eval_row = row
@@ -341,13 +350,13 @@ def train(cfg: Config, progress: dict):
                     tqdm.write("  val bpb by source: " + "  ".join(f"{s}={row[f'val_{s}_bpb']:.3f}" for s in sources))
                 if val_loss < best_val:
                     best_val, best_step, best_val_bpb = val_loss, step, row["val_bpb"]
-                    save_checkpoint(run_dir / "best.pt", model, cfg, step, row)
-                save_checkpoint(run_dir / "last.pt", model, cfg, step, row)
+                    save_checkpoint(run_dir / "best.pt", scored, cfg, step, row)
+                save_checkpoint(run_dir / "last.pt", scored, cfg, step, row)
                 progress["checkpoints"] = progress.get("checkpoints", 0) + 1
             if do_log:
                 logger.log(row)
             if do_sample:
-                text = make_sample(model, tok, cfg, eot_id, device, amp)
+                text = make_sample(scored, tok, cfg, eot_id, device, amp)
                 samples.write(f"=== step {step} ===\n{text}\n\n")
                 samples.flush()
                 tqdm.write(f"--- sample (step {step}) ---\n{text}\n--------------")

@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.attention.flex_attention import BlockMask, create_block_mask, flex_attention
+from torch.utils.checkpoint import checkpoint
 
 
 @dataclass
@@ -50,6 +51,8 @@ class Config:
     weight_decay: float = 0.1  # applied to 2D parameters only
     beta2: float = 0.95
     grad_clip: float = 1.0  # global grad norm; 0 disables
+    ema: bool = False  # keep an exponential moving average of the weights; evals, samples and checkpoints (best.pt, last.pt) use the averaged weights
+    ema_decay: float = 0.999  # EMA decay per optimizer step, ramped up from 0 early on so the average is not dominated by the initial weights
     # evaluation
     eval_every: int = 250  # steps between eval rows (val loss, checkpoints)
     eval_batches: int = 50  # val batches per eval, drawn with a fixed seed so rows are comparable
@@ -68,6 +71,7 @@ class Config:
     bf16: bool = True  # bfloat16 autocast (cuda only)
     loss: Literal["auto", "cce", "torch_compile", "torch"] = "auto"  # cut cross-entropy impl; auto = cce on cuda with bf16, else torch_compile; torch = plain F.cross_entropy
     compile: bool = True  # torch.compile the model with mode="reduce-overhead" (CUDA graphs on GPU); the first window includes compilation; FlexAttention (doc_mask, attn_window) is only fast when compiled; --no-compile turns it off
+    grad_checkpoint: bool = False  # activation checkpointing: each block's activations are recomputed in the backward pass instead of stored; much less memory (so a larger micro-batch fits), about a third more compute
     dev: bool = False  # dev run: outputs go to a temporary directory deleted on exit, so nothing is logged to runs/
 
     def to_dict(self) -> dict:
@@ -301,8 +305,13 @@ class Llama(nn.Module):
             cache[0]["pos"] = pos + t
         cos, sin = self.rope_cos[pos : pos + t], self.rope_sin[pos : pos + t]
         x = self.tok_emb(idx)
+        recompute = self.cfg.grad_checkpoint and self.training and cache is None and torch.is_grad_enabled()
         for i, block in enumerate(self.blocks):
-            x = block(x, cos, sin, cache[i] if cache is not None else None, masks[block.attn.window])
+            mask = masks[block.attn.window]
+            if recompute:  # the closure (not an argument) carries the mask: a BlockMask is not a tensor
+                x = checkpoint(lambda h, block=block, mask=mask: block(h, cos, sin, None, mask), x, use_reentrant=False, preserve_rng_state=False)
+            else:
+                x = block(x, cos, sin, cache[i] if cache is not None else None, mask)
         h = self.norm(x)
         return h if return_hidden else F.linear(h, self.classifier_weight)
 
@@ -314,11 +323,13 @@ class Llama(nn.Module):
         temperature: float = 1.0,
         top_k: int | None = None,
         eos_id: int | None = None,
-        generator: torch.Generator | None = None,
+        generator: torch.Generator | list[torch.Generator] | None = None,
         hidden_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
         kv_cache: bool = True,
     ) -> torch.Tensor:
         """Append up to `max_new_tokens` sampled tokens to idx (B, T); temperature 0 is greedy.
+
+        `generator` may be a list with one generator per row.
 
         Stops early once every row has produced `eos_id`; a row that has finished is padded with `eos_id`. Only the
         last position's logits are computed.
@@ -351,7 +362,11 @@ class Llama(nn.Module):
                 if top_k is not None:
                     kth = logits.topk(min(top_k, logits.shape[-1])).values[:, -1:]
                     logits = logits.masked_fill(logits < kth, -float("inf"))
-                nxt = torch.multinomial(logits.softmax(-1), 1, generator=generator)
+                probs = logits.softmax(-1)
+                if isinstance(generator, list):  # one generator per row: a row's sample does not depend on the other rows in the batch
+                    nxt = torch.stack([torch.multinomial(p, 1, generator=g) for p, g in zip(probs, generator)])
+                else:
+                    nxt = torch.multinomial(probs, 1, generator=generator)
             if eos_id is not None:
                 nxt = nxt.masked_fill(done[:, None], eos_id)
                 done |= nxt[:, 0] == eos_id
