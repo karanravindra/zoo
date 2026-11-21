@@ -41,7 +41,7 @@ Files:
   with the TinyStories runs; the other sources' held-out stories are in `validation_<source>/`, which `train.py` scores
   at every eval. `--max-docs 2000` runs the whole pipeline on a few rows per source; `--vocab-size` must match `train.py`'s.
 - `train.py`: step-based loop (not epochs): random windows from `zoo.data.text.TokenDataset`, AdamW with weight decay on
-  2D parameters only, linear warmup then cosine LR, grad clipping, optional bf16 autocast on cuda, optional weight EMA (`--ema`, decay `--ema-decay`; evals, samples
+  2D parameters only, linear warmup then cosine LR, grad clipping, optional bf16 autocast on cuda, optional weight EMA (`--ema`, averaging window `--ema-frac` of the steps taken so far, default 0.1, uncapped so it is the same share of training at every scale; evals, samples
   and `best.pt`/`last.pt` then use the averaged weights, the optimizer keeps training the raw ones; the `train_*` and gradient columns of metrics.csv still come from the raw weights, so a train/val gap on an EMA run mixes two models), an eval every
   `--eval-every` steps over `--eval-batches` fixed val batches, and a text sample every `--sample-every` steps
   (independent of evals; 0 disables). Each eval also scores every source's held-out stories (`validation_<source>/`

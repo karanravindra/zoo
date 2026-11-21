@@ -290,7 +290,7 @@ def train(cfg: Config, progress: dict):
             opt.step()
             stats.stepped(step)
             if ema is not None:
-                update_ema(ema, model, min(cfg.ema_decay, (1 + step) / (10 + step)))
+                update_ema(ema, model, cfg.ema_decay_at(step))
             n_window += 1
 
             # The time check reads the clock without a device sync, so it can run a few queued steps late.
