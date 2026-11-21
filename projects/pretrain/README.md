@@ -21,6 +21,8 @@ uv run projects/pretrain/train.py
 uv run projects/pretrain/sample.py --prompt "Once upon a time"
 uv run projects/pretrain/compare.py                    # all runs side by side -> runs/pretrain/comparison.png
 uv run projects/pretrain/sweep.py 'sweep-*'            # the runs named sweep-* as a grid over what they differ in -> runs/pretrain/sweep_grid.png
+uv run projects/pretrain/scaling_runs.py lrcal --dry-run   # the scaling-law runs (a phase from its table): plan, then drop --dry-run to train them
+uv run projects/pretrain/scaling.py                    # fit the scaling laws to every finished run in the protocol -> runs/pretrain/scaling/
 uv run projects/pretrain/bench.py                      # zero-shot benchmarks of every run -> runs/pretrain/benchmarks.csv
 uv run projects/pretrain/make_prompts.py               # once: shared story openings -> projects/pretrain/eval_prompts.jsonl
 uv run projects/pretrain/sample.py <run>/best.pt --prompts projects/pretrain/eval_prompts.jsonl --max-tokens 512 --out <run>/eval_stories.jsonl   # per run, and the tinystories baseline with projects/tinystories/sample.py
@@ -74,6 +76,17 @@ Files:
   `diverged` cell. Below the table, each row's best column value is listed with how many tested values lie on either side
   of it (`--margin`, default 2), i.e. whether the sweep brackets its optimum. Next sweep: pick a new `--run-name` prefix
   and pass it as the glob; `compare.py` on the same run dirs adds time, FLOPs, throughput and memory.
+- `scaling_runs.py`: launches the runs for the scaling laws (see "Scaling laws"): a table of (width, depth, global batch, LR,
+  FLOP budget) cells per phase, trained one after another with one protocol (constant LR after a 13M-token warmup, weight
+  EMA, head size 64, the same 800 validation windows whatever the micro-batch, about 25 eval rows per run). A cell whose run
+  directory has `results.json` is skipped, so phases can be rerun and extended; `--dry-run` lists parameters, tokens per
+  parameter, steps and a time estimate.
+- `scaling.py`: fits the laws to every finished run that follows the protocol: seed noise, the best LR per (width, depth,
+  batch) group, a joint LR law `LR* ~ width^a depth^b batch^c` (one regression over all groups, jackknife error bars), the
+  critical batch size, IsoFLOP profiles and a parametric `L(N, D) = E + A N^-alpha + B D^-beta` with bootstrap error
+  bars (and how much the data pin its exponents down), and `holdout`, which predicts the runs longer than `--fit-max-budget`
+  from a fit on the shorter ones. Figures (`lr.png`, `batch.png`, `lrlaw.png`, `iso.png`, `fit.png`) and `results.json` go to
+  `runs/pretrain/scaling/`.
 - `bench_memory.py`: speed and peak memory of the 1e18 / 3e18 run configs for each micro-batch size, with and without
   `--grad-checkpoint` (see "Batch size and GPU memory"). Writes `runs/pretrain/memory_bench.csv`.
 - `make_prompts.py`: writes `eval_prompts.jsonl` (committed): the first sentence of 100 held-out TinyStories stories
@@ -262,3 +275,56 @@ equals `torch.utils.flop_counter` on this model). Two flags train to a budget in
   usual warmup + cosine over those steps).
 - `--time-budget-s 557`: trains until that much training time has passed (eval, sampling and checkpointing excluded),
   with the cosine following elapsed time. With `--compile`, compilation counts against the budget.
+
+## Scaling laws
+
+`scaling_runs.py` trains a table of (width, depth, batch, LR, FLOPs) cells in phases; `scaling.py` reads every finished run
+back and fits the laws. One protocol for every run, so that they can be compared and fitted together: constant LR after a
+warmup of 13M tokens, a weight EMA whose window is 10% of the steps so far (`--ema-frac 0.1`), head size 64, context 2048,
+window attention with a document mask, and the same 800 validation windows in every run. Neither the LR nor the EMA depends on
+the planned length of a run, so the first k steps of a long run are a run of k steps: every eval row (about 25 per run) is
+also the loss at a smaller compute budget (`Run.at(c)` in `scaling.py`; a long run's early rows match a short run to 0.006 to
+0.014, inside the noise). That is a constant-LR, EMA protocol, not an annealed one, so the fits describe that kind of training.
+
+| phase | cells | what it is for |
+|---|---|---|
+| `scratchpad.sh` | d320 L5, batch 16/32/64 × 5 LRs at 1e16, and two more seeds of batch 32 / lr 4e-3 (`noise-*`) | the first LR × batch grid, and the seed noise |
+| `batch`, `batchlr` | d320 L5, batch 128 and 256 × several LRs, and a 3e16 run | where loss turns up with batch, at a tuned LR |
+| `lrcal` | d128 L5, d320 L2, d448 L5, d320 L12 × 5 LRs each (3e15 to 1e16) | best LR against width and depth |
+| `shapes` | 13 width × depth shapes, 1.5M to 27M parameters, batch 32, one LR each, 1e16 to 3e16 | the parametric fit over N and D |
+| `holdout` | d640 L7, d320 L8, d448 L8 at 1e17 | a test of that fit at 3.3× its largest compute |
+
+All figures below are `val_doc_loss`; one seed per cell except where stated, and the seed-to-seed std is about 0.03 from
+4e15 FLOPs on (2.2041, 2.1897 and 2.2515 for three seeds of d320 L5 at 1e16; no loss spikes), so gaps under about 0.1 between
+single runs mean little and fine optima need the pooled fits.
+
+- **Learning rate.** Best LR (parabola through the lowest three; every optimum is bracketed): d128 L5 7.9e-3, d320 L2 4.8e-3
+  (a flat valley), d320 L5 at batch 16/32/64/128/256 1.4e-3 / 3.8e-3 / 3.05e-3 / 2.6e-3 / 1.4e-3, d320 L12 4.0e-3 and d448 L5
+  4.0e-3 (both flat). The joint law `LR* = LR0 (width/320)^a (depth/5)^b (batch/32)^c` gives LR0 = 3.1e-3 (× or ÷ 1.25) and
+  exponents -1.4 ± 1.2, +0.2 ± 0.4 and +0.1 ± 0.6, i.e. none of them is determined. What the runs do show: from d320 to d448 and
+  from 2 to 12 layers the best LR stays within a factor of 2 of 4e-3, it is about 2× higher at d128, and with batch size it
+  rises from 16 to 32 and then falls (it does not follow a square-root rule).
+- **Batch size.** Loss at the best LR after 1e16 FLOPs: batch 16 2.220, 32 2.218, 64 2.227, 128 2.322, 256 2.782: up to 64
+  sequences (131k tokens) costs nothing; beyond that the loss at equal FLOPs rises quickly. Critical batch size (optimizer
+  steps to a target loss, `S = S_min (1 + B_crit / B)`): 18, 47, 112, 187 and 310 sequences at losses 3.11, 2.94, 2.76, 2.59
+  and 2.41, so it grows as the loss falls (`B_crit ~ loss^-13.8` over that range). The target 2.24 is reached by only three batch
+  sizes and is not determined.
+- **Width, depth and compute.** `L(N, D) = E + A N^-alpha + B D^-beta` fitted to the eval rows of the 14 tuned shapes: alpha
+  0.30 (68%: 0.20 to 0.40), beta 0.97 (0.87 to 1.02), E 1.31 (0.84 to 1.48), rms residual 0.032, the size of the seed noise.
+  What the data pin down is the loss, not the split of a budget between N and D: with beta fixed at 0.3, 0.5, 0.7, 1.0, 1.5 the
+  rms is 0.043, 0.038, 0.034, 0.032, 0.038, the compute-optimal exponent of N moves from 0.47 to 0.83 and N* at 1e17 from 16M to
+  50M parameters, while the predicted loss at 1e17 stays between 1.81 and 1.87; keeping only rows from 2e8 tokens on moves
+  beta to 1.5, because the D term absorbs the early constant-LR transient. The IsoFLOP profiles are jagged for the same
+  reason. Shape matters beyond N: at 1e16 FLOPs the 2-layer shapes (d320, d448) are 0.05 to 0.06 above the fit and d320 L12
+  0.05 above, while shapes with width/depth of 40 to 100 are about 0.03 below.
+- **Hold-out.** The fit above (runs of at most 3e16 FLOPs only) predicts these 1e17 runs before they are run; `scaling.py
+  holdout` prints the table, with the fit's beta fixed at other values too:
+
+  | shape | N (M) | tokens/param | free fit (68%) | beta 0.3 | beta 0.5 | beta 1.0 | observed |
+  |---|---|---|---|---|---|---|---|
+  | d320 L8 | 11.2 | 100 | 1.944 (1.911 to 1.961) | 1.818 | 1.862 | 1.949 | pending |
+  | d448 L8 | 21.3 | 30 | 1.869 (1.842 to 1.886) | 1.803 | 1.823 | 1.872 | pending |
+  | d640 L7 | 37.3 | 10 | 1.836 (1.811 to 1.865) | 1.821 | 1.824 | 1.837 | pending |
+
+Limits: one seed per cell; one LR per shape (set from `lrcal`, not tuned at every compute); batch 32 for the width, depth and
+compute fits; at most 1e17 FLOPs, so nothing here is evidence about 1e18 and beyond.
