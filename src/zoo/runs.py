@@ -61,8 +61,7 @@ def tee_console(run_dir: Path, name: str = "console.log") -> Path:
     """Copy everything printed to stdout and stderr from now on into `<run_dir>/console.log` (appended, so a
     resumed run keeps its earlier output). `new_run_dir` calls this; call it yourself for hand-made run dirs."""
     path = Path(run_dir) / name
-    log = open(path, "a", buffering=1)
-    atexit.register(log.close)
+    log = open(path, "a", buffering=1)  # never closed explicitly: the interpreter's last flush of sys.stdout runs after atexit hooks and would fail with exit code 120 on a closed file
     sys.stdout, sys.stderr = _Tee(sys.stdout, log), _Tee(sys.stderr, log)
     return path
 
