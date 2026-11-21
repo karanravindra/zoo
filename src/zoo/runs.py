@@ -128,6 +128,21 @@ def varying_keys(runs: list[dict], ignore: set[str] | frozenset[str] = frozenset
     return [k for k in keys if len({json.dumps(r["config"].get(k)) for r in runs}) > 1]
 
 
+def sweep_axes(runs: list[dict], ignore: set[str] | frozenset[str] = frozenset(), prefer: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """The independent axes of a sweep (runs from `load_run`): `varying_keys`, with keys that move together counted once.
+    A key that splits the runs exactly as an earlier one does (a warmup length derived from the batch size) is
+    dropped. Keys in `prefer` come first, in that order, so they win ties; the rest follow by name."""
+    keys = sorted(varying_keys(runs, ignore), key=lambda k: (prefer.index(k) if k in prefer else len(prefer), k))
+    axes, seen = [], set()
+    for k in keys:
+        groups: dict[str, int] = {}  # value -> number in order of first appearance, so equal splits give equal tuples
+        split = tuple(groups.setdefault(json.dumps(r["config"].get(k)), len(groups)) for r in runs)
+        if split not in seen:
+            seen.add(split)
+            axes.append(k)
+    return axes
+
+
 def diff_labels(runs: list[dict], ignore: set[str] | frozenset[str] = frozenset()) -> list[str]:
     """Label each run (from `load_run`) with the config keys that differ between the runs; fall back to its name."""
     varying = varying_keys(runs, ignore)

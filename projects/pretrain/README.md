@@ -20,6 +20,7 @@ uv run projects/pretrain/prepare.py             # once: train the tokenizer, wri
 uv run projects/pretrain/train.py
 uv run projects/pretrain/sample.py --prompt "Once upon a time"
 uv run projects/pretrain/compare.py                    # all runs side by side -> runs/pretrain/comparison.png
+uv run projects/pretrain/sweep.py 'sweep-*'            # the runs named sweep-* as a grid over what they differ in -> runs/pretrain/sweep_grid.png
 uv run projects/pretrain/bench.py                      # zero-shot benchmarks of every run -> runs/pretrain/benchmarks.csv
 uv run projects/pretrain/make_prompts.py               # once: shared story openings -> projects/pretrain/eval_prompts.jsonl
 uv run projects/pretrain/sample.py <run>/best.pt --prompts projects/pretrain/eval_prompts.jsonl --max-tokens 512 --out <run>/eval_stories.jsonl   # per run, and the tinystories baseline with projects/tinystories/sample.py
@@ -62,6 +63,17 @@ Files:
   is `val_doc_loss` when every run has it, else `val_loss` (`--metric` picks one). When any run has per-source columns,
   `comparison_sources.png` (next to the first figure) and a table show each run's bits per byte on every source at its
   best eval row.
+- `sweep.py`: one hyperparameter sweep as a grid. Takes the runs whose directory name matches a glob (`'sweep-*'`, i.e.
+  the `--run-name` prefix the sweep was started with) and puts each at the crossing of two config keys, `--rows` down and
+  `--cols` across; by default these are the config keys that differ (`--cols` alone for a one-key sweep; more than two
+  keys need the flags). Keys that move together, like a warmup length derived from the batch size, count as one axis, and
+  the batch size is the global one. The figure is a heatmap of each run's best val loss (best cell outlined), best val
+  loss against `--cols` with a line per row (each row's best starred), and the val curves against `--x` (tokens by
+  default; a hue per row, darker for later columns), and the same grid is printed as a table. Runs still training are
+  included and marked `*`, so a sweep can be read while it runs; a finished run that never logged a finite loss is a
+  `diverged` cell. Below the table, each row's best column value is listed with how many tested values lie on either side
+  of it (`--margin`, default 2), i.e. whether the sweep brackets its optimum. Next sweep: pick a new `--run-name` prefix
+  and pass it as the glob; `compare.py` on the same run dirs adds time, FLOPs, throughput and memory.
 - `bench_memory.py`: speed and peak memory of the 1e18 / 3e18 run configs for each micro-batch size, with and without
   `--grad-checkpoint` (see "Batch size and GPU memory"). Writes `runs/pretrain/memory_bench.csv`.
 - `make_prompts.py`: writes `eval_prompts.jsonl` (committed): the first sentence of 100 held-out TinyStories stories
