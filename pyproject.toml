@@ -25,6 +25,12 @@ dependencies = [
 ]
 
 [dependency-groups]
+celeba_gen = [
+    "dtour[cev]>=0.5.3",
+    "marimo>=0.25.2",
+    "polars>=2.1.0",
+    "wigglystuff==0.6.0",
+]
 # projects/ledger only: `uv run --group ledger projects/ledger/<script>.py`
 ledger = [
     "accelerate>=1.15.0",
