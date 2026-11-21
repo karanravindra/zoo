@@ -52,7 +52,7 @@ class Config:
     beta2: float = 0.95
     grad_clip: float = 1.0  # global grad norm; 0 disables
     ema: bool = False  # keep an exponential moving average of the weights; evals, samples and checkpoints (best.pt, last.pt) use the averaged weights
-    ema_decay: float = 0.999  # EMA decay per optimizer step, ramped up from 0 early on so the average is not dominated by the initial weights
+    ema_frac: float = 0.1  # EMA window as a fraction of the optimizer steps taken so far (0.1 = averages roughly the last 10% of training), so it is the same share of training at every scale and batch size
     # evaluation
     eval_every: int = 250  # steps between eval rows (val loss, checkpoints)
     eval_batches: int = 50  # val batches per eval, drawn with a fixed seed so rows are comparable
@@ -81,6 +81,12 @@ class Config:
     def from_dict(cls, d: dict) -> Config:
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in d.items() if k in known})
+
+    def ema_decay_at(self, step: int) -> float:
+        """EMA decay for the update after optimizer step `step`: the window 1/(1 - decay) is 1 + ema_frac * step
+        steps. It starts at 1 (the average is the weights, not dominated by the initial ones) and grows with the
+        run, with no cap, so a long run keeps the same share of training in its window."""
+        return 1 - 1 / (1 + self.ema_frac * step)
 
     @property
     def hidden_dim(self) -> int:

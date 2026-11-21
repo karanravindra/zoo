@@ -104,7 +104,7 @@ def measure(cfg: Config, steps: int, warmup_steps: int) -> dict:
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
         opt.step()
         if ema is not None:
-            update_ema(ema, model, min(cfg.ema_decay, (1 + i) / (10 + i)))
+            update_ema(ema, model, cfg.ema_decay_at(i))
 
     for i in range(1, warmup_steps + 1):
         step(i)
