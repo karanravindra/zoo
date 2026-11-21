@@ -40,6 +40,8 @@ IGNORE_KEYS = {"grad_accum", "run_name", "log_every", "sample_every", "sample_pr
 ALIASES = {"dim": "d", "block_size": "ctx", "n_heads": "h", "attn_window": "win", "attn_global_every": "g", "batch_size": "bs",
            "doc_mask": "mask", "doc_align": "align", "n_layers": "L", "lr": "lr"}
 X_LABELS = {"step": "step", "tokens": "training tokens", "elapsed_s": "training time", "flops": "training FLOPs"}
+# Reading order of config keys in a label (and the axis order of sweep.py): budget, architecture, then batch and lr.
+LABEL_ORDER = ["flop_budget", "block_size", "dim", "n_layers", "n_heads", "attn_window", "attn_global_every", "doc_mask", "doc_align", "batch_size", "lr"]
 
 
 @dataclass
@@ -80,8 +82,7 @@ def short_labels(runs: list[dict]) -> list[str]:
     keys = varying_keys(runs, IGNORE_KEYS)
     if "dim" in keys:  # n_heads follows dim in a width sweep, so it only adds noise
         keys = [k for k in keys if k != "n_heads"]
-    order = {k: i for i, k in enumerate(["flop_budget", "block_size", "dim", "n_layers", "n_heads", "attn_window", "attn_global_every", "doc_mask", "doc_align", "batch_size", "lr"])}
-    keys = sorted(keys, key=lambda k: order.get(k, len(order)))  # the same reading order in every label: budget, architecture, then batch and lr
+    keys = sorted(keys, key=lambda k: LABEL_ORDER.index(k) if k in LABEL_ORDER else len(LABEL_ORDER))  # the same reading order in every label
     labels = []
     for r in runs:
         parts = []
