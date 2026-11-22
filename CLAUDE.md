@@ -43,4 +43,5 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
 
 - Use atomic conventional commits, with the project as the scope when there is one: `feat(pixel_art): ...`, `docs(digitnet): ...`, `build: ...`.
 - Commit only when asked.
+- Never create a new branch. Always work on `main`.
 - Commits are SSH-signed. Don't use history-rewriting tools that strip signatures (e.g. `git filter-branch`); if you rewrite history, re-sign it.
