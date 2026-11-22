@@ -12,7 +12,7 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
 
 - Code reused across projects goes in `src/zoo/`. Utilities only; training loops, scripts and models stay in the project.
   - `zoo.paths`: `REPO_ROOT`, `DATA_ROOT`, `runs_root(project)`.
-  - `zoo.runs`: `git_commit`, `new_run_dir(project, config, device, stage=None, dev=False, name=None, **extra)`, `dev_run_dir(project)`, `tee_console(run_dir)`, `latest_checkpoint(project, name, stage=None)`, `MetricsLogger` (metrics.csv); `load_run`, `read_metrics`, `diff_labels`, `sort_runs`, `sweep_axes` (the independent config keys of a sweep) for a project's compare script.
+  - `zoo.runs`: `git_commit`, `new_run_dir(project, config, device, stage=None, dev=False, name=None, **extra)`, `dev_run_dir(project)`, `tee_console(run_dir)`, `latest_checkpoint(project, name, stage=None)`, `find_finished_run(project, config, stage=None, init=None, ignore=())` (a finished run with the same config, for a script's skip-duplicate flag), `MetricsLogger` (metrics.csv); `load_run`, `read_metrics`, `diff_labels`, `sort_runs`, `sweep_axes` (the independent config keys of a sweep) for a project's compare script.
   - `zoo.plot`: `plot_curves(rows, series, path, x="epoch")`; importing it selects the Agg backend (`from zoo.plot import plt`).
   - `zoo.metrics`: `to_unit`, `psnr`, `ssim` (images in [-1, 1]; pass `size=7` for 16x16), bits-per-byte for text.
   - `zoo.train`: `update_ema`, `Throughput` (steps/s timing), `ParamStats` (gradient norm, clipping, weight norm, update ratio, gradient direction; `STAT_FIELDS`).
