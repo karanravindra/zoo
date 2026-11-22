@@ -84,7 +84,7 @@ Files:
 - `scaling.py`: fits the laws to every finished run that follows the protocol: seed noise, the best LR per (width, depth,
   batch) group, a joint LR law `LR* ~ width^a depth^b batch^c` (one regression over all groups, jackknife error bars), the
   critical batch size, IsoFLOP profiles and a parametric `L(N, D) = E + A N^-alpha + B D^-beta` with bootstrap error
-  bars (and how much the data pin its exponents down), and `holdout`, which predicts the runs longer than `--fit-max-budget`
+  bars (and how much the data pin its exponents down), and `holdout`, which predicts the runs longer than `--holdout-from`
   from a fit on the shorter ones. Figures (`lr.png`, `batch.png`, `lrlaw.png`, `iso.png`, `fit.png`) and `results.json` go to
   `runs/pretrain/scaling/`.
 - `bench_memory.py`: speed and peak memory of the 1e18 / 3e18 run configs for each micro-batch size, with and without
@@ -309,22 +309,35 @@ single runs mean little and fine optima need the pooled fits.
   steps to a target loss, `S = S_min (1 + B_crit / B)`): 18, 47, 112, 187 and 310 sequences at losses 3.11, 2.94, 2.76, 2.59
   and 2.41, so it grows as the loss falls (`B_crit ~ loss^-13.8` over that range). The target 2.24 is reached by only three batch
   sizes and is not determined.
-- **Width, depth and compute.** `L(N, D) = E + A N^-alpha + B D^-beta` fitted to the eval rows of the 14 tuned shapes: alpha
-  0.30 (68%: 0.20 to 0.40), beta 0.97 (0.87 to 1.02), E 1.31 (0.84 to 1.48), rms residual 0.032, the size of the seed noise.
-  What the data pin down is the loss, not the split of a budget between N and D: with beta fixed at 0.3, 0.5, 0.7, 1.0, 1.5 the
-  rms is 0.043, 0.038, 0.034, 0.032, 0.038, the compute-optimal exponent of N moves from 0.47 to 0.83 and N* at 1e17 from 16M to
-  50M parameters, while the predicted loss at 1e17 stays between 1.81 and 1.87; keeping only rows from 2e8 tokens on moves
-  beta to 1.5, because the D term absorbs the early constant-LR transient. The IsoFLOP profiles are jagged for the same
-  reason. Shape matters beyond N: at 1e16 FLOPs the 2-layer shapes (d320, d448) are 0.05 to 0.06 above the fit and d320 L12
-  0.05 above, while shapes with width/depth of 40 to 100 are about 0.03 below.
-- **Hold-out.** The fit above (runs of at most 3e16 FLOPs only) predicts these 1e17 runs before they are run; `scaling.py
-  holdout` prints the table, with the fit's beta fixed at other values too:
+- **Width, depth and compute.** `L(N, D) = E + A N^-alpha + B D^-beta` fitted to the eval rows of the tuned shapes, one run
+  per shape. The first fit, on the 14 shapes of at most 3e16 FLOPs (1.5M to 27M parameters), gave alpha 0.30, beta 0.97
+  (68%: 0.87 to 1.02), E 1.31 and an rms residual of 0.032, the size of the seed noise, but it pinned beta down only loosely:
+  with beta fixed at 0.3, 0.5, 0.7, 1.0, 1.5 the rms was 0.043, 0.038, 0.034, 0.032, 0.038 and the exponent of the
+  compute-optimal N moved from 0.47 to 0.83. The hold-out below showed that beta near 1 was too high (keeping only rows from
+  2e8 tokens on had already pushed it to 1.5: the D term was absorbing the early constant-LR transient). Refitted with the three
+  1e17 runs added (16 shapes, up to 37M parameters): alpha 0.32 (0.23 to 0.45), beta 0.76 (0.68 to 0.90), E 1.25 (0.99 to
+  1.42), rms 0.033, and a compute-optimal N* ~ C^0.70 (0.61 to 0.79), D* ~ C^0.30: N* of 6M, 13M and 31M parameters at 1e16,
+  3e16 and 1e17 FLOPs, at 34, 22 and 13 tokens per parameter. With beta fixed at 0.3, 0.5, 0.7, 1.0, 1.5 the rms is 0.041,
+  0.036, 0.033, 0.035, 0.047 and N* at 1e17 is 16M, 23M, 30M, 38M, 49M; using rows from 2e8 tokens on only gives beta 0.38
+  and an exponent of 0.56. So beta between about 0.4 and 1.0 and an exponent of N* between about 0.55 and 0.75 are what the
+  data allow, and the loss at a given compute is much better determined than the split of the budget. The IsoFLOP profiles are
+  jagged (the exponent they give, 0.61 +- 0.09, agrees with the fit but shares its runs). Shape matters beyond N: at 1e16
+  FLOPs the 2-layer shapes (d320, d448) are 0.06 above the refit and d320 L12 0.04 above, while shapes with width/depth of
+  38 to 64 are 0.02 to 0.04 below.
+- **Hold-out.** The first fit (runs of at most 3e16 FLOPs only) predicted three 1e17 runs before they were run (`scaling.py
+  holdout`, which also fixes beta at other values). It overpredicted every one, by 0.04 to 0.09 and outside its 68% band,
+  most for the small model that trained longest; the beta 0.5 fit was within 0.025 on all three and the beta 0.3 fit within
+  0.037:
 
   | shape | N (M) | tokens/param | free fit (68%) | beta 0.3 | beta 0.5 | beta 1.0 | observed |
   |---|---|---|---|---|---|---|---|
-  | d320 L8 | 11.2 | 100 | 1.944 (1.911 to 1.961) | 1.818 | 1.862 | 1.949 | pending |
-  | d448 L8 | 21.3 | 30 | 1.869 (1.842 to 1.886) | 1.803 | 1.823 | 1.872 | pending |
-  | d640 L7 | 37.3 | 10 | 1.836 (1.811 to 1.865) | 1.821 | 1.824 | 1.837 | pending |
+  | d320 L8 | 11.2 | 100 | 1.944 (1.911 to 1.961) | 1.818 | 1.862 | 1.949 | 1.855 |
+  | d448 L8 | 21.3 | 30 | 1.869 (1.842 to 1.886) | 1.803 | 1.823 | 1.872 | 1.806 |
+  | d640 L7 | 37.3 | 10 | 1.836 (1.811 to 1.865) | 1.821 | 1.824 | 1.837 | 1.799 |
+
+  At 1e17 the 37M and 21M models are level (1.799 and 1.806, a gap well under the 0.03 seed noise) and the 11M model is about
+  0.05 worse, so the optimum is flat from about 20M parameters up (10 to 30 tokens per parameter), not at 11M with 100.
 
 Limits: one seed per cell; one LR per shape (set from `lrcal`, not tuned at every compute); batch 32 for the width, depth and
-compute fits; at most 1e17 FLOPs, so nothing here is evidence about 1e18 and beyond.
+compute fits; at most 1e17 FLOPs, so nothing here is evidence about 1e18 and beyond (the refit's 158M parameters at 1e18 is an
+extrapolation over a decade of compute).
