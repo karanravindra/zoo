@@ -26,7 +26,7 @@ analyses take every number from there:
   from a bootstrap over runs, the compute-optimal N* and D* it implies, and each shape's residual (a shape effect
   beyond N shows up there).
 
-- `holdout`: the test of `fit`. The law is fitted on runs of at most `--fit-max-budget` FLOPs only, and its prediction for
+- `holdout`: the test of `fit`. The law is fitted on runs of at most `--holdout-from` FLOPs only, and its prediction for
   each longer run (the `holdout` phase of scaling_runs.py: three shapes at 1e17) is printed next to what the run reached; with
   the exponent beta fixed at other values too, since the data pin beta down only loosely (see the `fit` printout).
 
@@ -35,7 +35,7 @@ Figures and a results.json go to `--out-dir` (default runs/pretrain/scaling), th
 
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache
 from pathlib import Path
 from typing import Literal
@@ -60,7 +60,8 @@ class Args:
     metric: Literal["val_doc_loss", "val_loss"] = "val_doc_loss"  # loss to fit; val_doc_loss is comparable across document options
     iso_batch: int = 32  # global batch of the runs used for the IsoFLOP profiles and the parametric fit
     min_budget: float = 1e16  # shortest budget of a run that counts as a tuned run for iso and fit
-    fit_max_budget: float = 3e16  # longest budget of a run used by iso and fit: longer runs are held out, for `holdout` to predict
+    fit_max_budget: float = 1e17  # longest budget of a run used by iso and fit (the default is every run)
+    holdout_from: float = 3e16  # holdout: fit on runs of at most this budget and predict the longer ones
     fit_min_tokens: float = 6e7  # eval rows before this many training tokens (the warmup and its aftermath) are left out of the parametric fit
     bootstraps: int = 100
     out_dir: Path = RUNS_ROOT / "scaling"
@@ -544,7 +545,7 @@ def run_fit(runs: list[Run], args: Args, out: dict, tuned: list[Run] | None = No
         n, d, l = optimal_split(fit, c / (6 * rho) / 1e6 / 1e9)
         frontier.append(dict(c=c, n_m=n, d_b=d, loss=l))
         print(f"  {c:7.0e}  {n:6.2f}  {d:6.2f}  {d * 1e3 / n:11.0f}  {l:.4f}{'   (extrapolated beyond the runs)' if c > 1.5 * max(r.flops[-1] for r in tuned) else ''}")
-    out["fit"] = dict(**fit, rho=rho, n_exponent=ex(fit), n_exponent_p16=float(np.percentile(exs, 16)), n_exponent_p84=float(np.percentile(exs, 84)), frontier=frontier,
+    out["fit"] = dict(**fit, rho=rho, n_exponent=ex(fit), n_exponent_p16=float(np.percentile(exs, 16)), n_exponent_p84=float(np.percentile(exs, 84)), frontier=frontier, max_budget=args.fit_max_budget,
                       ci={k: ci(k) for k in ("alpha", "beta", "E")})
 
     # How well do the data pin the exponents down? Refit with beta fixed: if the rms hardly moves, beta is not identified, and
@@ -605,19 +606,19 @@ def run_fit(runs: list[Run], args: Args, out: dict, tuned: list[Run] | None = No
 
 
 def run_holdout(runs: list[Run], args: Args, out: dict) -> None:
-    """Predict the runs beyond `fit_max_budget` from a fit on the shorter ones. The planned cells of the `holdout` phase are
+    """Predict the runs beyond `holdout_from` from a fit on the shorter ones. The planned cells of the `holdout` phase are
     listed before they are run, so that the prediction is on record first."""
     try:
         from scaling_runs import PHASES, model_config
         planned = [(c.dim, c.layers, c.lr, c.budget) for c in PHASES.get("holdout", [])]
     except ImportError:
         planned, model_config = [], None
-    seen = {(r.dim, r.layers, r.budget): r for r in runs if r.seed == 0 and r.batch == args.iso_batch and r.budget > args.fit_max_budget * 1.01}
+    seen = {(r.dim, r.layers, r.budget): r for r in runs if r.seed == 0 and r.batch == args.iso_batch and r.budget > args.holdout_from * 1.01}
     shapes = sorted({(d, l, lr, c) for d, l, lr, c in planned} | {(r.dim, r.layers, r.lr, r.budget) for r in seen.values()}, key=lambda s: (s[3], count_params(s[0], s[1])))
     if not shapes:
         return
-    tuned = tuned_runs(runs, args)
-    print(f"\n== holdout: fit on the {len(tuned)} tuned runs of at most {args.fit_max_budget:.0e} FLOPs, prediction for longer runs ==")
+    tuned = tuned_runs(runs, replace(args, fit_max_budget=args.holdout_from))
+    print(f"\n== holdout: fit on the {len(tuned)} tuned runs of at most {args.holdout_from:.0e} FLOPs, prediction for longer runs ==")
     pts = eval_points(tuned, args.fit_min_tokens)
     free = fit_chinchilla(pts["n"], pts["d"], pts["loss"])
     fits = {"free": free} | {f"beta={b}": fit_chinchilla(pts["n"], pts["d"], pts["loss"], beta=b) for b in (0.3, 0.5, 1.0)}
@@ -641,7 +642,7 @@ def run_holdout(runs: list[Run], args: Args, out: dict) -> None:
         rows.append(dict(dim=dim, layers=layers, lr=lr, budget=c, n_m=n, d_b=d, pred=pred, band=band.tolist(), observed=obs))
         print(f"  {dim:>4}x{layers:<4}{c:>7.0e}{n:>7.1f}{d * 1e3 / n:>8.0f}   " + "".join(f"{v:>12.3f}" for v in pred.values()) + f"  {band[0]:>6.3f}..{band[1]:.3f}"
               + (f"{obs:>10.4f}{obs - pred['free']:>+9.3f}" if math.isfinite(obs) else f"{'(not run)':>10}"))
-    out["holdout"] = rows
+    out["holdout"] = dict(fit_budget=args.holdout_from, rows=rows)
 
 
 def run_lrlaw(runs: list[Run], args: Args, out: dict) -> None:
@@ -749,7 +750,10 @@ def main(args: Args):
     if "holdout" in args.analyses:
         run_holdout(runs, args, out)
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    (args.out_dir / "results.json").write_text(json.dumps(out, indent=2))
+    path = args.out_dir / "results.json"
+    if path.exists():  # a run of some analyses only must not erase the others' results
+        out = {**json.loads(path.read_text()), **out}
+    path.write_text(json.dumps(out, indent=2))
     print(f"\nWrote {args.out_dir}/")
 
 
