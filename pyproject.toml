@@ -10,27 +10,27 @@ requires-python = ">=3.12"
 dependencies = [
     "cut-cross-entropy",
     "datasets>=5.2.0",
+    "dtour[cev]>=0.5.3",
     "gigatoken>=0.11.0",
+    "lpips>=0.1.4",
+    "marimo>=0.25.2",
     "matplotlib>=3.11.2",
     "nvidia-ml-py>=13.615.71",
+    "polars>=2.1.0",
     "pyarrow>=26.0.1",
     "scikit-learn>=1.9.1",
     "torch>=2.15.0",
+    "torch-fidelity>=0.4.0",
     "torchinfo>=1.8.0",
     "torchvision>=0.29.2",
     "tqdm>=4.70.1",
     "transformers>=5.22.2",
     "tyro>=1.0.17",
     "umap-learn>=0.6.0",
+    "wigglystuff==0.6.0",
 ]
 
 [dependency-groups]
-celeba_gen = [
-    "dtour[cev]>=0.5.3",
-    "marimo>=0.25.2",
-    "polars>=2.1.0",
-    "wigglystuff==0.6.0",
-]
 # projects/ledger only: `uv run --group ledger projects/ledger/<script>.py`
 ledger = [
     "accelerate>=1.15.0",
