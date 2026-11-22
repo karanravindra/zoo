@@ -99,6 +99,40 @@ def latest_checkpoint(project: str, name: str, stage: str | None = None) -> Path
     return runs[-1]
 
 
+def find_finished_run(
+    project: str,
+    config: dict,
+    stage: str | None = None,
+    init: str | Path | None = None,
+    ignore: set[str] | frozenset[str] = frozenset(),
+) -> Path | None:
+    """A finished run (one with `results.json`) under `runs/<project>[/<stage>]/` whose config equals `config`, else None.
+
+    Keys in `ignore` are left out on both sides: settings that don't change what the run learns (its name, `compile`,
+    how often it logs). `init` is the checkpoint the run starts from; `new_run_dir` stores it next to the config, not in
+    it, and the same config from another checkpoint is a different run, so it is compared as a resolved path (list a
+    config field that holds it in `ignore`). The git commit and the device are not compared."""
+
+    def keep(c: dict) -> dict:  # through JSON, so tuples compare equal to the lists they were saved as
+        return {k: v for k, v in json.loads(json.dumps(c)).items() if k not in ignore}
+
+    def resolved(p: str | Path | None) -> str | None:
+        return str(Path(p).resolve()) if p else None
+
+    want, want_init = keep(config), resolved(init)
+    base = runs_root(project) / stage if stage else runs_root(project)
+    for path in sorted(base.glob("*/config.json")):
+        if not (path.parent / "results.json").exists():
+            continue  # still training, or it crashed: not a result to reuse
+        try:
+            meta = json.loads(path.read_text())
+        except ValueError:
+            continue
+        if keep(meta["config"]) == want and resolved(meta.get("init")) == want_init:
+            return path.parent
+    return None
+
+
 def read_metrics(run: Path) -> dict[str, list[float]]:
     """A run's metrics file as columns ({} if it has no rows yet); blank cells (a column that is only filled on
     some rows, e.g. val_loss on eval rows) become nan."""
