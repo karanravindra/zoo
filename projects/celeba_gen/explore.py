@@ -1,5 +1,5 @@
 # /// notebook
-# Run with: uv run --group celeba_gen marimo edit projects/celeba_gen/explore.py
+# Run with: uv run marimo edit projects/celeba_gen/explore.py
 # ///
 
 import marimo
