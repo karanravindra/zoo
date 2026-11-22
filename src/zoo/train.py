@@ -10,11 +10,11 @@ import torch
 
 @torch.no_grad()
 def update_ema(ema, model, decay: float) -> None:
-    """EMA of the parameters (`ema = decay * ema + (1 - decay) * model`); buffers are copied."""
-    for pe, pm in zip(ema.parameters(), model.parameters()):
-        pe.lerp_(pm, 1 - decay)
-    for be, bm in zip(ema.buffers(), model.buffers()):
-        be.copy_(bm)
+    """EMA of the parameters (`ema = decay * ema + (1 - decay) * model`); buffers are copied. Fused over all tensors
+    (`torch._foreach_*`), a handful of kernel launches per step instead of one per tensor."""
+    torch._foreach_lerp_(list(ema.parameters()), list(model.parameters()), 1 - decay)
+    if buffers := list(ema.buffers()):  # the foreach ops reject an empty list, and a model need not have buffers
+        torch._foreach_copy_(buffers, list(model.buffers()))
 
 
 class Throughput:
