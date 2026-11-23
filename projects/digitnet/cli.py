@@ -1,8 +1,10 @@
-"""Train DigitNet (a small CNN) on MNIST.
+"""DigitNet: a small CNN on MNIST.
 
-Run from anywhere: `uv run projects/digitnet/train.py`
+  uv run projects/digitnet/cli.py prepare           download and cache the dataset
+  uv run projects/digitnet/cli.py train [flags]     train and score the test set once
 
-Each run is a W&B run in the `digitnet` project, with local files in `<runs>/digitnet/<run id>/`:
+`<command> --help` lists a command's flags. A training run is a W&B run in the `digitnet` project, with local files in
+`<runs>/digitnet/<run id>/`:
   checkpoints/   the best by val/acc, plus last.ckpt
   config.json    the full config
   csv/           metrics.csv, a local copy of the logged metrics
@@ -10,22 +12,31 @@ Each run is a W&B run in the `digitnet` project, with local files in `<runs>/dig
 """
 
 from dataclasses import asdict
+from typing import Annotated
 
 import tyro
 from torchinfo import summary
 
-from config import Config
+from config import Config, PrepareConfig
 from data import DigitData
 from module import LitDigitNet
 
 from zoo import data
+from zoo.paths import DATA_ROOT
 from zoo.training import make_trainer
 from zoo.utils.device import seed_everything
 
 PROJECT = "digitnet"
 
 
-def main(cfg: Config):
+def prepare(cfg: PrepareConfig) -> None:
+    ds_cls = getattr(data, cfg.dataset)
+    for train in (True, False):
+        ds_cls(root=str(DATA_ROOT), train=train)
+    print(f"{cfg.dataset} is cached")
+
+
+def train(cfg: Config) -> None:
     seed_everything(cfg.seed, deterministic=cfg.deterministic)
     module = LitDigitNet(asdict(cfg))
     c, h, w = getattr(data, cfg.dataset).image_shape
@@ -38,5 +49,16 @@ def main(cfg: Config):
     trainer.test(module, datamodule, ckpt_path=None if cfg.dev else "best")
 
 
+Command = Annotated[PrepareConfig, tyro.conf.subcommand("prepare")] | Annotated[Config, tyro.conf.subcommand("train")]
+
+
+def main(cmd: Command) -> None:
+    match cmd:
+        case PrepareConfig():
+            prepare(cmd)
+        case Config():
+            train(cmd)
+
+
 if __name__ == "__main__":
-    main(tyro.cli(Config, description=__doc__))
+    main(tyro.cli(Command, description=__doc__))

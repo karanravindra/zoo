@@ -25,9 +25,9 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
   - `config.py`: `Config(RunConfig)` with the project's fields.
   - `module.py`: the model and its `LightningModule`, together. A multi-stage project has one such file per stage, named for it (`ae.py`, `flow.py`), each holding that stage's network, loss or sampler, and module.
   - `data.py`: `LightningDataModule` or dataloaders.
-  - `train.py`: `main(tyro.cli(Config))`. Multi-stage projects use one config, module and script per stage (`train_ae.py`, `train_flow.py`, ...) and pass `stage=` to `make_trainer`. A later stage takes the earlier stage's checkpoint path as a required flag (`--ae-ckpt`), and its module bundles what it needs, so one checkpoint is self-contained. `projects/digitdreamer/` is the multi-stage reference.
-  - `sweeps/*.yaml`: committed W&B sweep configs (`program` is the `train.py` path, `command` uses `uv run`).
-  - `projects/digitnet/` is the reference.
+  - `cli.py`: the one entry point, with a tyro subcommand per step (`prepare`, `train`, ...), each a short function over its own config dataclass: `main(tyro.cli(Command))`. A multi-stage project has one training command per stage (`ae`, `flow`), which passes `stage=` to `make_trainer`, plus any `sample`/eval command. A later stage takes the earlier stage's checkpoint path as a required flag (`--ae-ckpt`), and its module bundles what it needs, so one checkpoint is self-contained. `projects/digitdreamer/` is the multi-stage reference.
+  - `sweeps/*.yaml`: committed W&B sweep configs (`program` is the `cli.py` path, `command` uses `uv run` and names the subcommand before `${args}`).
+  - `projects/digitnet/` is the single-stage reference.
 - Scripts import sibling modules directly (`from config import Config`); Python already puts the script's directory on `sys.path`, so no `sys.path` hacks.
 - Dependencies used by one project only live in a uv dependency group named after it (`uv run --group ledger ...`).
 - Keep the README in sync when scripts, outputs, or configs change.
@@ -35,7 +35,7 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
 ## Script config
 
 - Every runnable script builds its settings from a dataclass and parses them with [tyro](https://brentyi.github.io/tyro/), so the dataclass fields define the CLI flags. Don't use argparse.
-- Pattern: `main(tyro.cli(Config))`. Defaults live in the dataclass, and a field's trailing comment is its `--help` text. Don't put a comment on the line above a field: tyro reads it as that field's help.
+- Pattern: `main(tyro.cli(Command))`, where `Command` is a union of `Annotated[Config, tyro.conf.subcommand("name")]` (see `projects/digitnet/cli.py`). Defaults live in the dataclass, and a field's trailing comment is its `--help` text. Don't put a comment on the line above a field: tyro reads it as that field's help.
 - Training configs extend `zoo.training.RunConfig`, which provides `epochs`, `max_steps`, `seed`, `deterministic`, `precision`, `grad_clip`, `lr_schedule` (`constant` = no decay, `cosine`, `linear`, `onecycle`), `warmup`, `min_lr_ratio`, `ema`, `compile`, `num_workers`, `log_every`, `wandb`, `name`, `group`, `tags`, `csv` and `dev`. Don't redefine them, other than to change a default.
 - The config is the single source of truth. `make_trainer` logs it to W&B and writes `config.json`, and the module takes it as a plain dict (`save_hyperparameters`), so `load_from_checkpoint` rebuilds the model. Keep configs plain, serializable dataclasses.
 - `compile: bool = False`. When it's set, call `compile_(self.net)` (in place: `model.compile(mode="reduce-overhead", dynamic=False)`, not `torch.compile(model)`, which adds `_orig_mod.` to the checkpoint keys) in the module's `setup` for `stage == "fit"`, on the inner network and not the LightningModule. Keep `dynamic=False`: with dynamic shapes, Python floats become float64 graph inputs, which crash Inductor on MPS and slow it down even when they don't. Varying shapes and float values just trigger recompiles instead.

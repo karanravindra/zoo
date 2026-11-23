@@ -1,7 +1,7 @@
 # Learning-rate sweep. Create it once, then start agents:
 #   uv run wandb sweep --project digitnet projects/digitnet/sweeps/lr.yaml
 #   uv run wandb agent <entity>/digitnet/<sweep id>
-program: projects/digitnet/train.py
+program: projects/digitnet/cli.py
 method: grid
 metric:
   name: val/acc
@@ -13,4 +13,5 @@ command:
   - uv
   - run
   - ${program}
+  - train
   - ${args}
