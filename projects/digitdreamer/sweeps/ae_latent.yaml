@@ -1,0 +1,21 @@
+# Autoencoder sweep over the latent size and the detail-masking probability. Create it once, then start agents:
+#   uv run wandb sweep --project digitdreamer projects/digitdreamer/sweeps/ae_latent.yaml
+#   uv run wandb agent <entity>/digitdreamer/<sweep id>
+program: projects/digitdreamer/cli.py
+method: grid
+metric:
+  name: val/mse
+  goal: minimize
+parameters:
+  latent_channels:
+    values: [2, 4, 8]
+  mask_prob:
+    values: [0.0, 0.5]
+  group:
+    value: ae-latent-sweep
+command:
+  - uv
+  - run
+  - ${program}
+  - ae
+  - ${args}
