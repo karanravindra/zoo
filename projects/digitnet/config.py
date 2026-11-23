@@ -20,3 +20,10 @@ class Config(RunConfig):
     weight_decay: float = 5e-4  # AdamW
     lr_schedule: Literal["constant", "cosine", "linear", "onecycle"] = "onecycle"  # "constant" = no decay
     log_every: int = 20  # steps between logged train metrics
+
+
+@dataclass
+class PrepareConfig:
+    """Download and cache the dataset, so `train` starts straight away."""
+
+    dataset: str = "MNIST"  # class name in zoo.data
