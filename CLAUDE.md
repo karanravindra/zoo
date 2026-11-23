@@ -14,7 +14,7 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
 - `projects/archive/` holds the old pre-Lightning projects, which use `zoo.runs`, `zoo.monitor`, hand-written loops and `metrics.csv`. Port a project out of it into `projects/<name>/` and delete the archived copy as you go. Don't add to the archive, and don't build on its patterns.
 - Code reused across projects goes in `src/zoo/`. Start a project self-contained and promote code into `zoo` when a second project needs it.
   - `zoo.paths`: `REPO_ROOT`, `DATA_ROOT`, `RUNS_ROOT`, `runs_root(project)`. `ZOO_DATA_ROOT` / `ZOO_RUNS_ROOT` override the defaults (a Lightning Studio points them at its persistent storage).
-  - `zoo.training`: `RunConfig` (the shared settings every project's `Config` extends), `make_trainer(cfg, project, monitor=, mode=, callbacks=, stage=)` (W&B + CSV loggers, checkpoints, LR/throughput/param-stat logging), `compile_(model)`, `make_scheduler(optimizer, cfg, total_steps)` (use it in `configure_optimizers`; the optimizer's `lr` is the peak), and the `EMA`, `ThroughputMonitor`, `ParamStatsMonitor` callbacks.
+  - `zoo.training`: `RunConfig` (the shared settings every project's `Config` extends), `make_trainer(cfg, project, monitor=, mode=, callbacks=, stage=)` (W&B + CSV loggers, checkpoints, LR/throughput/param-stat logging), `compile_(model)`, `log_images(trainer, key, images)` (a grid to W&B), `load_module(cls, path)` (a checkpoint back into its module, with the EMA weights applied), `make_scheduler(optimizer, cfg, total_steps)` (use it in `configure_optimizers`; the optimizer's `lr` is the peak), and the `EMA`, `ThroughputMonitor`, `ParamStatsMonitor` callbacks.
   - `zoo.train`: `update_ema`, `Throughput`, `ParamStats`. The pieces behind the callbacks above.
   - `zoo.plot`: `plot_curves(rows, series, path, x="epoch")`; importing it selects the Agg backend (`from zoo.plot import plt`).
   - `zoo.metrics`: `to_unit`, `psnr`, `ssim` (images in [-1, 1]; pass `size=7` for 16x16), bits-per-byte for text.
@@ -23,9 +23,9 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
   - `zoo.runs` and `zoo.monitor` are legacy, kept only until the archive is gone. Don't use them in new code.
 - A project is a folder `projects/<name>/` with a `README.md`, otherwise self-contained:
   - `config.py`: `Config(RunConfig)` with the project's fields.
-  - `module.py`: the model and its `LightningModule`.
+  - `module.py`: the model and its `LightningModule`, together. A multi-stage project has one such file per stage, named for it (`ae.py`, `flow.py`), each holding that stage's network, loss or sampler, and module.
   - `data.py`: `LightningDataModule` or dataloaders.
-  - `train.py`: `main(tyro.cli(Config))`. Multi-stage projects use one script per stage (`train_stage1.py`, ...) and pass `stage=` to `make_trainer`.
+  - `train.py`: `main(tyro.cli(Config))`. Multi-stage projects use one config, module and script per stage (`train_ae.py`, `train_flow.py`, ...) and pass `stage=` to `make_trainer`. A later stage takes the earlier stage's checkpoint path as a required flag (`--ae-ckpt`), and its module bundles what it needs, so one checkpoint is self-contained. `projects/digitdreamer/` is the multi-stage reference.
   - `sweeps/*.yaml`: committed W&B sweep configs (`program` is the `train.py` path, `command` uses `uv run`).
   - `projects/digitnet/` is the reference.
 - Scripts import sibling modules directly (`from config import Config`); Python already puts the script's directory on `sys.path`, so no `sys.path` hacks.

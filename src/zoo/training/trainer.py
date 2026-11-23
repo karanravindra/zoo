@@ -89,7 +89,7 @@ def make_trainer(
         precision=cfg.precision,
         gradient_clip_val=cfg.grad_clip or None,
         log_every_n_steps=cfg.log_every,
-        deterministic=cfg.deterministic or None,
+        deterministic="warn" if cfg.deterministic else None,  # warn, not error, where no deterministic kernel exists
         logger=loggers,
         enable_checkpointing=checkpointing,
         callbacks=callbacks,
