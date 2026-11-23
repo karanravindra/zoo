@@ -14,12 +14,20 @@ class EMA(Callback):
 
     The average is held as plain tensors rather than a deepcopy of the module, so compiling the model stays
     unaffected. It is swapped in for validation/test, and swapped out again for training. The shadow weights are saved in
-    checkpoints under `callbacks["EMA"]`, and `load_into(module)` applies them (for sampling or export)."""
+    checkpoints under `callbacks["EMA"]`, and `load_into(module)` applies them (for sampling or export).
+
+    It is updated once per optimizer step (not per micro-batch, so gradient accumulation leaves its window alone), and the
+    decay warms up: the n-th update uses `min(decay, (1 + n) / (10 + n))`. Without that the average starts at the
+    initialization and carries a share `decay ** n` of it (37% after 1/(1 - decay) steps). While the warm-up lasts the window
+    is about a ninth of the steps taken so far, which is the same share of training at every run length; a `decay` close
+    enough to 1 (0.99999) keeps it so for any run you would make, and 0.999 caps the window at 1000 steps."""
 
     def __init__(self, decay: float = 0.999) -> None:
         self.decay = decay
+        self.updates = 0  # optimizer steps averaged so far, which sets the warm-up of the decay
         self.shadow: list[torch.Tensor] | None = None
         self._backup: list[torch.Tensor] | None = None
+        self._step = 0  # the trainer's global step at the last batch: it moves only when the optimizer steps
 
     @staticmethod
     def _tensors(module: torch.nn.Module) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
@@ -30,11 +38,19 @@ class EMA(Callback):
             params, buffers = self._tensors(pl_module)
             self.shadow = [t.detach().clone() for t in params + buffers]
 
+    def on_train_start(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
+        self._step = trainer.global_step  # nonzero when resuming
+
     @torch.no_grad()
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx) -> None:
+        if trainer.global_step == self._step:  # a micro-batch inside a gradient accumulation window: the weights are the same
+            return
+        self._step = trainer.global_step
+        decay = min(self.decay, (1 + self.updates) / (10 + self.updates))
+        self.updates += 1
         params, buffers = self._tensors(pl_module)
         n = len(params)
-        torch._foreach_lerp_(self.shadow[:n], [p.detach() for p in params], 1 - self.decay)
+        torch._foreach_lerp_(self.shadow[:n], [p.detach() for p in params], 1 - decay)
         if buffers:
             torch._foreach_copy_(self.shadow[n:], [b.detach() for b in buffers])
 
@@ -68,10 +84,11 @@ class EMA(Callback):
             self._swap_out(pl_module)
 
     def state_dict(self) -> dict:
-        return {"shadow": self.shadow}
+        return {"shadow": self.shadow, "updates": self.updates}
 
     def load_state_dict(self, state_dict: dict) -> None:
         self.shadow = state_dict["shadow"]
+        self.updates = state_dict.get("updates", 1 << 30)  # a checkpoint from before the warm-up has long since passed it
 
     @classmethod
     def load_from_checkpoint(cls, path) -> EMA:
