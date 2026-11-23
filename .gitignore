@@ -22,3 +22,7 @@ dist/
 
 # OS
 .DS_Store
+
+# Weights & Biases / Lightning, if run from the repo root
+wandb/
+lightning_logs/

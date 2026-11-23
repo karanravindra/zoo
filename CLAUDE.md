@@ -10,34 +10,46 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
 
 ## Layout
 
-- Code reused across projects goes in `src/zoo/`. Utilities only; training loops, scripts and models stay in the project.
-  - `zoo.paths`: `REPO_ROOT`, `DATA_ROOT`, `runs_root(project)`.
-  - `zoo.runs`: `git_commit`, `new_run_dir(project, config, device, stage=None, dev=False, name=None, **extra)`, `dev_run_dir(project)`, `tee_console(run_dir)`, `latest_checkpoint(project, name, stage=None)`, `find_finished_run(project, config, stage=None, init=None, ignore=())` (a finished run with the same config, for a script's skip-duplicate flag), `MetricsLogger` (metrics.csv); `load_run`, `read_metrics`, `diff_labels`, `sort_runs`, `sweep_axes` (the independent config keys of a sweep) for a project's compare script.
+- Training uses [PyTorch Lightning](https://lightning.ai/docs/pytorch/stable/) and experiments are tracked in [Weights & Biases](https://docs.wandb.ai/). Every new project is built on them from the start.
+- `projects/archive/` holds the old pre-Lightning projects, which use `zoo.runs`, `zoo.monitor`, hand-written loops and `metrics.csv`. Port a project out of it into `projects/<name>/` and delete the archived copy as you go. Don't add to the archive, and don't build on its patterns.
+- Code reused across projects goes in `src/zoo/`. Start a project self-contained and promote code into `zoo` when a second project needs it.
+  - `zoo.paths`: `REPO_ROOT`, `DATA_ROOT`, `RUNS_ROOT`, `runs_root(project)`. `ZOO_DATA_ROOT` / `ZOO_RUNS_ROOT` override the defaults (a Lightning Studio points them at its persistent storage).
+  - `zoo.training`: `RunConfig` (the shared settings every project's `Config` extends), `make_trainer(cfg, project, monitor=, mode=, callbacks=, stage=)` (W&B + CSV loggers, checkpoints, LR/throughput/param-stat logging), `compile_(model)`, and the `EMA`, `ThroughputMonitor`, `ParamStatsMonitor` callbacks.
+  - `zoo.train`: `update_ema`, `Throughput`, `ParamStats`. The pieces behind the callbacks above.
   - `zoo.plot`: `plot_curves(rows, series, path, x="epoch")`; importing it selects the Agg backend (`from zoo.plot import plt`).
   - `zoo.metrics`: `to_unit`, `psnr`, `ssim` (images in [-1, 1]; pass `size=7` for 16x16), bits-per-byte for text.
-  - `zoo.train`: `update_ema`, `Throughput` (steps/s timing), `ParamStats` (gradient norm, clipping, weight norm, update ratio, gradient direction; `STAT_FIELDS`).
-  - `zoo.monitor`: `GpuMonitor` (GPU utilisation, memory, power, temperature; `GPU_FIELDS`).
   - `zoo.data`: `ImageDataset`/`MNIST`/`QMNIST` (`data/image.py`), token corpora on disk (`data/text.py`).
   - `zoo.utils`: device and seeding.
-- Scripts import sibling modules directly (`from common import ...`); Python already puts the script's directory on `sys.path`, so no `sys.path` hacks.
+  - `zoo.runs` and `zoo.monitor` are legacy, kept only until the archive is gone. Don't use them in new code.
+- A project is a folder `projects/<name>/` with a `README.md`, otherwise self-contained:
+  - `config.py`: `Config(RunConfig)` with the project's fields.
+  - `module.py`: the model and its `LightningModule`.
+  - `data.py`: `LightningDataModule` or dataloaders.
+  - `train.py`: `main(tyro.cli(Config))`. Multi-stage projects use one script per stage (`train_stage1.py`, ...) and pass `stage=` to `make_trainer`.
+  - `sweeps/*.yaml`: committed W&B sweep configs (`program` is the `train.py` path, `command` uses `uv run`).
+  - `projects/digitnet/` is the reference.
+- Scripts import sibling modules directly (`from config import Config`); Python already puts the script's directory on `sys.path`, so no `sys.path` hacks.
 - Dependencies used by one project only live in a uv dependency group named after it (`uv run --group ledger ...`).
-- Each project lives in `projects/<name>/` with a `README.md` and is otherwise self-contained. Keep the README in sync when scripts, outputs, or configs change.
+- Keep the README in sync when scripts, outputs, or configs change.
 
 ## Script config
 
 - Every runnable script builds its settings from a dataclass and parses them with [tyro](https://brentyi.github.io/tyro/), so the dataclass fields define the CLI flags. Don't use argparse.
-- Pattern: `main(tyro.cli(Config))`. Defaults live in the dataclass, and a field's trailing comment is its `--help` text.
-- Every script that runs a model has a `compile: bool = False` field. When it's set, call `model.compile(mode="reduce-overhead", dynamic=False)` in place (not `torch.compile(model)`, which adds `_orig_mod.` to the checkpoint keys), after `torchinfo.summary` and after any EMA `deepcopy`. Keep `dynamic=False`: with dynamic shapes, Python floats become float64 graph inputs, which crash Inductor on MPS and slow it down even when they don't. Varying shapes and float values just trigger recompiles instead.
-- Every training script has a `dev: bool = False` field for throwaway runs: pass `dev=cfg.dev` to `zoo.runs.new_run_dir` (or use `zoo.runs.dev_run_dir`), which swaps the run directory for a temporary one deleted on exit, so nothing is logged to `runs/`.
-- Training configs are saved into checkpoints, so they should stay plain, serializable dataclasses.
+- Pattern: `main(tyro.cli(Config))`. Defaults live in the dataclass, and a field's trailing comment is its `--help` text. Don't put a comment on the line above a field: tyro reads it as that field's help.
+- Training configs extend `zoo.training.RunConfig`, which provides `epochs`, `max_steps`, `seed`, `deterministic`, `precision`, `grad_clip`, `compile`, `num_workers`, `log_every`, `wandb`, `name`, `group`, `tags`, `csv` and `dev`. Don't redefine them, other than to change a default.
+- The config is the single source of truth. `make_trainer` logs it to W&B and writes `config.json`, and the module takes it as a plain dict (`save_hyperparameters`), so `load_from_checkpoint` rebuilds the model. Keep configs plain, serializable dataclasses.
+- `compile: bool = False`. When it's set, call `compile_(self.net)` (in place: `model.compile(mode="reduce-overhead", dynamic=False)`, not `torch.compile(model)`, which adds `_orig_mod.` to the checkpoint keys) in the module's `setup` for `stage == "fit"`, on the inner network and not the LightningModule. Keep `dynamic=False`: with dynamic shapes, Python floats become float64 graph inputs, which crash Inductor on MPS and slow it down even when they don't. Varying shapes and float values just trigger recompiles instead.
+- `dev: bool = False` makes a throwaway run: `make_trainer` skips W&B and checkpoints and uses a temp directory deleted on exit.
+- Use `zoo.training.EMA` for weight averages rather than a deepcopy; it keeps the shadow weights as tensors, so compiling is unaffected.
 
 ## Run outputs
 
-- Each run writes to `runs/<project>/<timestamp>/` (gitignored; a script can pass `name=` to `new_run_dir` for a descriptive directory name instead, as tinystories does): `config.json` (config plus git commit and device), `console.log` (everything printed to stdout/stderr; `new_run_dir` sets it up), `metrics.csv`, `best.pt` / `last.pt` checkpoints, and `results.json`.
-- `runs/` is a symlink to `/mnt/ai/zoo/runs` (the big disk); use it through the symlink.
-- `data/` (`DATA_ROOT`: token caches and the like) is a symlink to `/mnt/ai/zoo/data` for the same reason; the local disk is small. HF downloads already go to `/mnt/ai/data/hf` (`HF_HOME`).
-- Training scripts log `STAT_FIELDS` (from `ParamStats`) and `GPU_FIELDS` (from `GpuMonitor`) in `metrics.csv`. A column that is only measured on some rows is left blank on the others; `zoo.runs.read_metrics` reads blanks as nan and `plot_curves` skips them.
-- Save plots as PNG files. Never call `plt.show()`.
+- Metrics, config, git state, system stats (GPU utilisation, memory, power, temperature) and console output live in W&B. The W&B project is the project folder's name; use `group` for the stage or sweep, `name` and `tags` to tell runs apart.
+- Local files go to `<RUNS_ROOT>/<project>/<run id>/` (the run id is the W&B id; gitignored): `checkpoints/` (best by the monitored metric plus `last.ckpt`), `config.json`, `csv/metrics.csv` (a local backup of the logged metrics) and `wandb/`.
+- Log metrics as `train/…`, `val/…`, `test/…`, with `lr-…`, `perf/…` and `stats/…` coming from the callbacks. Score the test set once, with the checkpoint chosen on validation (`trainer.test(..., ckpt_path="best")`).
+- Log images and other media to W&B (`wandb.Image`), not to PNG files in the run directory. Plots saved as files are PNGs; never call `plt.show()`.
+- Credentials come from the environment (`WANDB_API_KEY`, `WANDB_ENTITY`, and `WANDB_MODE=offline` when unreachable; upload later with `wandb sync <dir>`). Never write a key into the repo. `wandb login` is interactive, so the user runs it.
+- `runs/` is a symlink to `/mnt/ai/zoo/runs` (the big disk) and `data/` (`DATA_ROOT`) to `/mnt/ai/zoo/data`; the local disk is small. HF downloads already go to `/mnt/ai/data/hf` (`HF_HOME`). Cheap CPU checks that make a run directory point `ZOO_RUNS_ROOT` at the scratchpad.
 
 ## Git
 
