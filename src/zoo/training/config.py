@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Literal
 
 
@@ -31,3 +31,9 @@ class RunConfig:
     tags: tuple[str, ...] = ()  # W&B tags
     csv: bool = True  # also write metrics.csv locally, a backup if W&B is unreachable
     dev: bool = False  # throwaway run: no W&B, no checkpoints, outputs in a temp dir deleted on exit
+
+    @classmethod
+    def from_dict(cls, d: dict):
+        """Rebuild from a saved config, ignoring keys the class no longer has (so old checkpoints keep loading)."""
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
