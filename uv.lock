@@ -4824,6 +4824,7 @@ name = "zoo"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "awkward" },
     { name = "cut-cross-entropy" },
     { name = "datasets" },
     { name = "dtour", extra = ["cev"] },
@@ -4865,6 +4866,7 @@ pretrain = [
 
 [package.metadata]
 requires-dist = [
+    { name = "awkward", specifier = ">=2.15.0" },
     { name = "cut-cross-entropy", git = "https://github.com/apple/ml-cross-entropy.git" },
     { name = "datasets", specifier = ">=5.2.0" },
     { name = "dtour", extras = ["cev"], specifier = ">=0.5.3" },

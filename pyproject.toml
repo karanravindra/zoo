@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "awkward>=2.15.0",
     "cut-cross-entropy",
     "datasets>=5.2.0",
     "dtour[cev]>=0.5.3",
