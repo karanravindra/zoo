@@ -1,0 +1,35 @@
+# Scaling-law study, step 1: the best peak learning rate against width on TinyStories. Short runs (5000 steps, 82M tokens) of
+# three ladder sizes (aspect 64: 192, 384 and 512 wide) at five learning rates. `cli.py fit-lr --group tinystories-lr` turns
+# them into the rule the ladder sweeps use (`--lr` at width 256 and `--lr-width-exp`). Create it once, then start an agent:
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_lr.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+# The EMA window is a ninth of the steps so far (ema 0.99999 only caps it), the same share of training at every length.
+program: projects/gpt/cli.py
+method: grid
+name: scaling-lr
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [3, 6, 8]
+  lr:
+    values: [6.0e-4, 1.1e-3, 2.0e-3, 3.6e-3, 6.5e-3]
+  aspect:
+    value: 64
+  max_steps:
+    value: 5000
+  val_every:
+    value: 500
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-lr
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}

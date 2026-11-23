@@ -1,0 +1,39 @@
+# Scaling-law study, shape: the attention head size. 32 and 128 against the ladder's 64 (so 2x more and 2x fewer heads) for the aspect-64
+# sizes of 4 and 6 layers, each to 3e15 FLOPs like the shape grid. The parameters and FLOPs do not change with the head size.
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_heads.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-heads
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [4, 6]
+  head_dim:
+    values: [32, 128]
+  aspect:
+    value: 64
+  max_flops:
+    value: 3.0e+15
+  lr:
+    value: 2.0e-3
+  lr_width_exp:
+    value: 1.0
+  val_every:
+    value: 200
+  val_tokens:
+    value: 524288
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-shape
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}

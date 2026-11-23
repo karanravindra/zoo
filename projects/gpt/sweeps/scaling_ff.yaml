@@ -1,0 +1,40 @@
+# Scaling-law study, shape: the MLP size. The SwiGLU hidden size is ff_mult x the width (the ladder uses Llama's 8/3: ff_mult 0 = default)
+# at 1x, 2x, 4x and 6x, for the aspect-64 sizes of 3, 4 and 6 layers, each to 3e15 FLOPs like the shape grid. A larger MLP is more
+# parameters and more FLOPs per token, so `cli.py fit-shape` compares at equal compute and also corrects for the size.
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_ff.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-ff
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [3, 4, 6]
+  ff_mult:
+    values: [1.0, 2.0, 4.0, 6.0]
+  aspect:
+    value: 64
+  max_flops:
+    value: 3.0e+15
+  lr:
+    value: 2.0e-3
+  lr_width_exp:
+    value: 1.0
+  val_every:
+    value: 200
+  val_tokens:
+    value: 524288
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-shape
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}

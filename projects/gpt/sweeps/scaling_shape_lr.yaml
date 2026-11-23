@@ -1,0 +1,41 @@
+# Scaling-law study, shape: is the learning rate fair to every depth? The ladder's rule sets the LR from the width alone (2e-3 at width
+# 256, falling as 1 / width), so a deep, narrow network gets the LR of a shallow one of the same width. Here the width is fixed at 192 and
+# the depth is 2, 4, 8 and 12 layers, each at half and double the rule's LR (`lr` is the peak at width 256: 1e-3 and 4e-3 against 2e-3,
+# so 1.3e-3 and 5.3e-3 at this width), to 3e15 FLOPs like the shape grid. The rule's own run of each is in the grid (scaling_shape.yaml).
+# If the best LR moves with the depth, the grid's deep cells are mistuned and the grid understates them. `cli.py fit-shape` reads these
+# runs with the grid's rule-LR runs of the same width into an LR-by-depth table (its own W&B group, so the grid's fits do not see them).
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_shape_lr.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-shape-lr
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [2, 4, 8, 12]
+  lr:
+    values: [1.0e-3, 4.0e-3]
+  dim:
+    value: 192
+  max_flops:
+    value: 3.0e+15
+  lr_width_exp:
+    value: 1.0
+  val_every:
+    value: 200
+  val_tokens:
+    value: 524288
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-shape-lr
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}

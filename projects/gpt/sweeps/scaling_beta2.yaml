@@ -1,0 +1,39 @@
+# Scaling-law study, optimizer settings: AdamW beta2 at 0.9 and 0.99 against the ladder's 0.95, on the 4-layer aspect-64 size (4.3M parameters),
+# to 3e15 FLOPs like the shape grid. `cli.py fit-optim` compares each with the shape grid's run of the same size at equal compute.
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_beta2.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-beta2
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    value: 4
+  lr:
+    value: 2.0e-3
+  beta2:
+    values: [0.9, 0.99]
+  aspect:
+    value: 64
+  max_flops:
+    value: 3.0e+15
+  lr_width_exp:
+    value: 1.0
+  val_every:
+    value: 200
+  val_tokens:
+    value: 524288
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-optim
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}

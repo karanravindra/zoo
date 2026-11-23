@@ -1,0 +1,41 @@
+# Scaling-law study, step 3 (more lengths): `scaling_anneal.yaml` found the annealed-minus-EMA gap changes sign with the length of the run
+# (a constant LR with an EMA wins at 2,500 steps, a cosine schedule at 10,000), so the ladder's exponents do not carry over unchanged.
+# Two more lengths for the 3- and 6-layer sizes (5,000 and 20,000 steps) fill in the curve of the gap against tokens, which is what
+# `cli.py check-anneal` prints and what turns the ladder's constant-LR losses into annealed-equivalent ones. Same group and settings.
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_anneal_mid.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-anneal-mid
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [3, 6]
+  max_steps:
+    values: [5000, 20000]
+  aspect:
+    value: 64
+  lr:
+    value: 2.0e-3
+  lr_width_exp:
+    value: 1.0
+  lr_schedule:
+    value: cosine
+  min_lr_ratio:
+    value: 0.0
+  ema:
+    value: 0.0
+  val_every:
+    value: 500
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-anneal
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}

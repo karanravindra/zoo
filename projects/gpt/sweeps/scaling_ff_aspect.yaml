@@ -1,0 +1,41 @@
+# Scaling-law study, shape: does the best MLP size depend on the depth / width balance? The SwiGLU hidden size is ff_mult x the width
+# (the ladder uses Llama's 8/3). `scaling_ff.yaml` varies it at aspect 64 only; this one moves the aspect ratio (width / layers) to 24, 32,
+# 96 and 128, with a 1x and a 4x MLP (the usual GELU-transformer size), each to 3e15 FLOPs like the shape grid. `cli.py fit-shape` fits the
+# grid and every variant together with one offset per MLP size and prints how that offset changes with the aspect ratio.
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_ff_aspect.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-ff-aspect
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [2, 8]
+  dim:
+    values: [192, 256]
+  ff_mult:
+    values: [1.0, 4.0]
+  max_flops:
+    value: 3.0e+15
+  lr:
+    value: 2.0e-3
+  lr_width_exp:
+    value: 1.0
+  val_every:
+    value: 200
+  val_tokens:
+    value: 524288
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-shape
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}
