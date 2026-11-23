@@ -27,7 +27,7 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
   - `data.py`: `LightningDataModule` or dataloaders.
   - `cli.py`: the one entry point, with a tyro subcommand per step (`prepare`, `train`, ...), each a short function over its own config dataclass: `main(tyro.cli(Command))`. A multi-stage project has one training command per stage (`ae`, `flow`), which passes `stage=` to `make_trainer`, plus any `sample`/eval command. A later stage takes the earlier stage's checkpoint path as a required flag (`--ae-ckpt`), and its module bundles what it needs, so one checkpoint is self-contained. `projects/digitdreamer/` is the multi-stage reference.
   - `sweeps/*.yaml`: committed W&B sweep configs (`program` is the `cli.py` path, `command` uses `uv run` and names the subcommand before `${args}`).
-  - `projects/digitnet/` is the single-stage reference.
+  - `projects/digitnet/` is the single-stage reference. `projects/gpt/` is a multi-stage language-model project (pretrain now; sft, dpo and grpo to come) on sharded token corpora.
 - Scripts import sibling modules directly (`from config import Config`); Python already puts the script's directory on `sys.path`, so no `sys.path` hacks.
 - Dependencies used by one project only live in a uv dependency group named after it (`uv run --group ledger ...`).
 - Keep the README in sync when scripts, outputs, or configs change.
