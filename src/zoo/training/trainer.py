@@ -20,13 +20,16 @@ from zoo.training.callbacks import EMA, ParamStatsMonitor, ThroughputMonitor
 from zoo.training.config import RunConfig
 
 
-def compile_(model: torch.nn.Module) -> torch.nn.Module:
+def compile_(model: torch.nn.Module, cudagraphs: bool = True) -> torch.nn.Module:
     """Compile in place (not `torch.compile(model)`, which adds `_orig_mod.` to checkpoint keys).
 
     Call it on the inner network (e.g. `self.net`) in the LightningModule's `setup`, after any weight-dependent copies.
     `dynamic=False`: with dynamic shapes, Python floats become float64 graph inputs, which crash Inductor on MPS and
-    slow it down even when they don't; varying shapes just trigger recompiles instead."""
-    model.compile(mode="reduce-overhead", dynamic=False)
+    slow it down even when they don't; varying shapes just trigger recompiles instead.
+    `cudagraphs=False` compiles without CUDA graphs (still compiled, a little slower): needed when gradients are
+    accumulated over several micro-batches (`accumulate_grad_batches > 1`), as the next replay overwrites the gradient
+    tensors of the previous one before the optimizer has used them (a RuntimeError at the first step)."""
+    model.compile(mode="reduce-overhead" if cudagraphs else None, dynamic=False)
     return model
 
 
