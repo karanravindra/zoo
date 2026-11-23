@@ -18,7 +18,7 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
   - `zoo.train`: `update_ema`, `Throughput`, `ParamStats`. The pieces behind the callbacks above.
   - `zoo.plot`: `plot_curves(rows, series, path, x="epoch")`; importing it selects the Agg backend (`from zoo.plot import plt`).
   - `zoo.metrics`: `to_unit`, `psnr`, `ssim` (images in [-1, 1]; pass `size=7` for 16x16), bits-per-byte for text.
-  - `zoo.data`: `ImageDataset`/`MNIST`/`QMNIST` (`data/image.py`), token corpora on disk (`data/text.py`).
+  - `zoo.data`: `ImageDataset`/`MNIST`/`QMNIST` (`data/image.py`), token corpora on disk as shards (`data/text.py`: `write_token_corpus` writes `shard_NNNN.npy` files, `Shards` / `TokenDataset` read them as one array; every project's prepare step writes through it).
   - `zoo.utils`: device and seeding.
   - `zoo.runs` and `zoo.monitor` are legacy, kept only until the archive is gone. Don't use them in new code.
 - A project is a folder `projects/<name>/` with a `README.md`, otherwise self-contained:
