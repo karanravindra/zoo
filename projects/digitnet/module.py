@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from config import Config
 
 from zoo import data
-from zoo.training import compile_
+from zoo.training import compile_, make_scheduler
 
 
 def conv_block(c_in: int, c_out: int, k: int) -> nn.Sequential:
@@ -80,5 +80,4 @@ class LitDigitNet(L.LightningModule):
 
     def configure_optimizers(self):
         opt = torch.optim.AdamW(self.parameters(), lr=self.cfg.lr, weight_decay=self.cfg.weight_decay)
-        sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=self.cfg.lr, total_steps=int(self.trainer.estimated_stepping_batches))
-        return {"optimizer": opt, "lr_scheduler": {"scheduler": sched, "interval": "step"}}
+        return {"optimizer": opt, "lr_scheduler": make_scheduler(opt, self.cfg, int(self.trainer.estimated_stepping_batches))}

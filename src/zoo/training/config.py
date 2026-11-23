@@ -18,6 +18,10 @@ class RunConfig:
     deterministic: bool = False  # deterministic kernels (slower)
     precision: str = "32-true"  # Lightning precision: "32-true", "bf16-mixed", "16-mixed", ...
     grad_clip: float = 0.0  # max gradient norm (0 = off)
+    lr_schedule: Literal["constant", "cosine", "linear", "onecycle"] = "cosine"  # "constant" = no decay; see zoo.training.make_scheduler
+    warmup: int = 0  # linear warmup steps (constant, cosine, linear)
+    min_lr_ratio: float = 0.0  # final lr as a fraction of the peak (cosine, linear)
+    ema: float = 0.0  # decay of the weight average (0 = off), e.g. 0.999; validation and test use the average
     compile: bool = False  # compile the model (see zoo.training.compile_)
     num_workers: int = 4  # DataLoader workers
     log_every: int = 50  # steps between logged train metrics
