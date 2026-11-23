@@ -12,6 +12,7 @@ dependencies = [
     "datasets>=5.2.0",
     "dtour[cev]>=0.5.3",
     "gigatoken>=0.11.0",
+    "lightning>=2.6.6",
     "lpips>=0.1.4",
     "marimo>=0.25.2",
     "matplotlib>=3.11.2",
@@ -27,6 +28,7 @@ dependencies = [
     "transformers>=5.22.2",
     "tyro>=1.0.17",
     "umap-learn>=0.6.0",
+    "wandb>=0.31.2",
     "wigglystuff==0.6.0",
 ]
 
