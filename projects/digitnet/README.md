@@ -14,13 +14,14 @@ The reference project for the Lightning + W&B layout described in `CLAUDE.md`.
 ```
 uv run projects/digitnet/train.py
 uv run projects/digitnet/train.py --epochs 20 --lr 1e-3 --name lr1e-3   # every Config field is a flag; see --help
+uv run projects/digitnet/train.py --lr-schedule constant --ema 0.999     # no lr decay, EMA weights for val/test
 uv run projects/digitnet/train.py --wandb offline                       # no network; upload later with `wandb sync`
 uv run projects/digitnet/train.py --dev --epochs 1                      # throwaway: no W&B, no checkpoints
 ```
 
 Files:
 - `config.py`: `Config`, the project's fields on top of `zoo.training.RunConfig`.
-- `module.py`: `DigitNet` and `LitDigitNet` (`LightningModule`: loss/accuracy per split, AdamW with a one-cycle schedule).
+- `module.py`: `DigitNet` and `LitDigitNet` (`LightningModule`: loss/accuracy per split, AdamW with `--lr-schedule`, one-cycle by default).
 - `data.py`: `DigitData` (`LightningDataModule`); the validation set is carved deterministically from the train split
   (`val_size`, `seed`) and only used to pick the checkpoint.
 - `train.py`: the training script. Scores the test set once, with the best checkpoint.

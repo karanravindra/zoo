@@ -73,6 +73,13 @@ class EMA(Callback):
     def load_state_dict(self, state_dict: dict) -> None:
         self.shadow = state_dict["shadow"]
 
+    @classmethod
+    def load_from_checkpoint(cls, path) -> EMA:
+        """The averaged weights saved in a Lightning checkpoint, ready for `load_into`."""
+        ema = cls()
+        ema.shadow = torch.load(path, map_location="cpu", weights_only=True)["callbacks"]["EMA"]["shadow"]
+        return ema
+
     def load_into(self, module: torch.nn.Module) -> None:
         """Copy the averaged weights into `module` (same architecture as the trained one)."""
         params, buffers = self._tensors(module)

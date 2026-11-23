@@ -16,7 +16,7 @@ from lightning.pytorch.callbacks import Callback, LearningRateMonitor, ModelChec
 from lightning.pytorch.loggers import CSVLogger, WandbLogger
 
 from zoo.paths import runs_root
-from zoo.training.callbacks import ParamStatsMonitor, ThroughputMonitor
+from zoo.training.callbacks import EMA, ParamStatsMonitor, ThroughputMonitor
 from zoo.training.config import RunConfig
 
 
@@ -45,8 +45,10 @@ def make_trainer(
     Layout: `checkpoints/` (best by `monitor` if given, plus `last.ckpt`), `config.json`, `csv/metrics.csv` and
     W&B's own `wandb/` files. The W&B project is `project`, the group is `cfg.group` (or `stage`).
     With `cfg.dev` nothing is logged or kept: no W&B, no checkpoints, outputs in a temp dir deleted on exit.
-    Extra keyword arguments go to `Trainer` (e.g. `val_check_interval`, `devices`, `strategy`)."""
+    `cfg.ema > 0` adds the `EMA` callback. Extra keyword arguments go to `Trainer` (e.g. `val_check_interval`, `devices`, `strategy`)."""
     callbacks = list(callbacks or [])
+    if cfg.ema > 0 and not any(isinstance(c, EMA) for c in callbacks):
+        callbacks.append(EMA(cfg.ema))
     callbacks += [ThroughputMonitor(cfg.log_every), ParamStatsMonitor(cfg.log_every)]
 
     if cfg.dev:

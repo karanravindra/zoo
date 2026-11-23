@@ -14,7 +14,7 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
 - `projects/archive/` holds the old pre-Lightning projects, which use `zoo.runs`, `zoo.monitor`, hand-written loops and `metrics.csv`. Port a project out of it into `projects/<name>/` and delete the archived copy as you go. Don't add to the archive, and don't build on its patterns.
 - Code reused across projects goes in `src/zoo/`. Start a project self-contained and promote code into `zoo` when a second project needs it.
   - `zoo.paths`: `REPO_ROOT`, `DATA_ROOT`, `RUNS_ROOT`, `runs_root(project)`. `ZOO_DATA_ROOT` / `ZOO_RUNS_ROOT` override the defaults (a Lightning Studio points them at its persistent storage).
-  - `zoo.training`: `RunConfig` (the shared settings every project's `Config` extends), `make_trainer(cfg, project, monitor=, mode=, callbacks=, stage=)` (W&B + CSV loggers, checkpoints, LR/throughput/param-stat logging), `compile_(model)`, and the `EMA`, `ThroughputMonitor`, `ParamStatsMonitor` callbacks.
+  - `zoo.training`: `RunConfig` (the shared settings every project's `Config` extends), `make_trainer(cfg, project, monitor=, mode=, callbacks=, stage=)` (W&B + CSV loggers, checkpoints, LR/throughput/param-stat logging), `compile_(model)`, `make_scheduler(optimizer, cfg, total_steps)` (use it in `configure_optimizers`; the optimizer's `lr` is the peak), and the `EMA`, `ThroughputMonitor`, `ParamStatsMonitor` callbacks.
   - `zoo.train`: `update_ema`, `Throughput`, `ParamStats`. The pieces behind the callbacks above.
   - `zoo.plot`: `plot_curves(rows, series, path, x="epoch")`; importing it selects the Agg backend (`from zoo.plot import plt`).
   - `zoo.metrics`: `to_unit`, `psnr`, `ssim` (images in [-1, 1]; pass `size=7` for 16x16), bits-per-byte for text.
@@ -36,11 +36,11 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
 
 - Every runnable script builds its settings from a dataclass and parses them with [tyro](https://brentyi.github.io/tyro/), so the dataclass fields define the CLI flags. Don't use argparse.
 - Pattern: `main(tyro.cli(Config))`. Defaults live in the dataclass, and a field's trailing comment is its `--help` text. Don't put a comment on the line above a field: tyro reads it as that field's help.
-- Training configs extend `zoo.training.RunConfig`, which provides `epochs`, `max_steps`, `seed`, `deterministic`, `precision`, `grad_clip`, `compile`, `num_workers`, `log_every`, `wandb`, `name`, `group`, `tags`, `csv` and `dev`. Don't redefine them, other than to change a default.
+- Training configs extend `zoo.training.RunConfig`, which provides `epochs`, `max_steps`, `seed`, `deterministic`, `precision`, `grad_clip`, `lr_schedule` (`constant` = no decay, `cosine`, `linear`, `onecycle`), `warmup`, `min_lr_ratio`, `ema`, `compile`, `num_workers`, `log_every`, `wandb`, `name`, `group`, `tags`, `csv` and `dev`. Don't redefine them, other than to change a default.
 - The config is the single source of truth. `make_trainer` logs it to W&B and writes `config.json`, and the module takes it as a plain dict (`save_hyperparameters`), so `load_from_checkpoint` rebuilds the model. Keep configs plain, serializable dataclasses.
 - `compile: bool = False`. When it's set, call `compile_(self.net)` (in place: `model.compile(mode="reduce-overhead", dynamic=False)`, not `torch.compile(model)`, which adds `_orig_mod.` to the checkpoint keys) in the module's `setup` for `stage == "fit"`, on the inner network and not the LightningModule. Keep `dynamic=False`: with dynamic shapes, Python floats become float64 graph inputs, which crash Inductor on MPS and slow it down even when they don't. Varying shapes and float values just trigger recompiles instead.
 - `dev: bool = False` makes a throwaway run: `make_trainer` skips W&B and checkpoints and uses a temp directory deleted on exit.
-- Use `zoo.training.EMA` for weight averages rather than a deepcopy; it keeps the shadow weights as tensors, so compiling is unaffected.
+- `cfg.ema > 0` makes `make_trainer` add `zoo.training.EMA` (don't deepcopy the model for averaging). Validation and test use the average, so the best checkpoint is chosen on it; checkpoints hold the live weights, and the average is saved under `callbacks["EMA"]` (`EMA.load_from_checkpoint(path).load_into(model)` applies it).
 
 ## Run outputs
 
