@@ -1,0 +1,38 @@
+# Scaling-law study, step 2b: a learning-rate bracket around the ladder's rule, for two of the cheap sizes the rule was not calibrated on
+# (2 and 4 layers; the LR sweep had 3, 6 and 8): the rule's LR times 0.7 and times 1.4 (`lr` is the peak at width 256, so 1.4e-3 and 2.8e-3
+# against 2e-3). It checks the rule at the full 29,500 steps, not the 5000 of the LR sweep.
+# Same group as the ladder; `fit-scaling` takes, for each size, the run with the lowest final loss, so a size whose best LR is off
+# the rule is not held against the law. If the bracket wins at the ends of the sizes, the rule is off there.
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_bracket.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-bracket
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [2, 4]
+  lr:
+    values: [1.4e-3, 2.8e-3]
+  aspect:
+    value: 64
+  max_flops:
+    value: 1.0e+17
+  lr_width_exp:
+    value: 1.0
+  val_every:
+    value: 500
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-ladder
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}

@@ -1,0 +1,41 @@
+# Scaling-law study, step 3: does a constant LR with an EMA show the same scaling as the usual recipe, an LR that anneals to zero?
+# Three sizes at three lengths (the last, 29,500 steps, is one pass over TinyStories), each with a cosine schedule to zero and no EMA,
+# at the ladder's learning rate. `cli.py check-anneal` compares each final loss with the ladder run's loss at the same step: if the
+# gap is about the same at every size and length, the ladder's exponents carry over to annealed training.
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_anneal.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-anneal
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [3, 6, 8]
+  max_steps:
+    values: [2500, 10000, 29500]
+  aspect:
+    value: 64
+  lr:
+    value: 2.0e-3
+  lr_width_exp:
+    value: 1.0
+  lr_schedule:
+    value: cosine
+  min_lr_ratio:
+    value: 0.0
+  ema:
+    value: 0.0
+  val_every:
+    value: 500
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-anneal
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}

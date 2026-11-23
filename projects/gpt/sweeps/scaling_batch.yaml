@@ -1,0 +1,44 @@
+# Scaling-law study, optimizer settings: tokens per step (the ladder's is 16,384) at half and double, each with three peak LRs around the rule's
+# (`lr` is the peak at width 256, which is this size's width; Adam's best LR usually moves with the square root of the batch, so about 1.4e-3
+# at 8192 and 2.8e-3 at 32768), on the 4-layer aspect-64 size (4.3M parameters), to 3e15 FLOPs like the shape grid. `batch_size` 32 sequences
+# per micro-batch makes both batch sizes a whole number of micro-batches. `cli.py fit-optim` prints each batch size's LRs, the best LR, and the
+# gap to the shape grid's run at equal compute; a best LR at the end of the three means the bracket was too narrow (add a run by hand).
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_batch.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-batch
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    value: 4
+  global_batch:
+    values: [8192, 32768]
+  lr:
+    values: [1.4e-3, 2.0e-3, 2.8e-3]
+  batch_size:
+    value: 32
+  aspect:
+    value: 64
+  max_flops:
+    value: 3.0e+15
+  lr_width_exp:
+    value: 1.0
+  val_every:
+    value: 200
+  val_tokens:
+    value: 524288
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-optim
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}

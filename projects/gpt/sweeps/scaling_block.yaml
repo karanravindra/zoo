@@ -1,0 +1,48 @@
+# Scaling-law study, shape: the context length. 128, 256, 512 and 1024 tokens per window for the aspect-64 sizes of 4 and 6 layers, each to
+# 3e15 FLOPs like the shape grid, with the same 16,384 tokens per step (`micro_tokens` makes the micro-batch the whole step, 128 to 16
+# windows, so there is no gradient accumulation and the run keeps CUDA graphs).
+# The mean validation loss is over the positions of a window, so it is not comparable across context lengths: `val_by_pos` also logs it
+# for positions 0-32, 32-64, ... and `cli.py fit-shape` compares the ranges every context length has. The attention FLOPs grow with the
+# context (they are in `flops_per_token`), so the comparison is at equal compute.
+# (The command uses ${args_no_boolean_flags}: a true boolean becomes a bare flag, which is what tyro takes.)
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_block.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-block
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [4, 6]
+  block_size:
+    values: [128, 256, 512, 1024]
+  micro_tokens:
+    value: 16384
+  val_by_pos:
+    value: true
+  aspect:
+    value: 64
+  max_flops:
+    value: 3.0e+15
+  lr:
+    value: 2.0e-3
+  lr_width_exp:
+    value: 1.0
+  val_every:
+    value: 200
+  val_tokens:
+    value: 524288
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-shape
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args_no_boolean_flags}

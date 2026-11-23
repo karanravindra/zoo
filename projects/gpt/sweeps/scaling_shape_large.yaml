@@ -1,0 +1,39 @@
+# Scaling-law study, shape at a larger budget: the depth x width grid again, fewer cells (3, 6 and 12 layers x width 256, 384 and 512;
+# 3.5M to 40M parameters, aspect ratio 21 to 171) at 8e15 FLOPs, the compute-optimal size of which is about 10M parameters. It shows whether the best aspect
+# ratio found at 3e15 FLOPs (scaling_shape.yaml) moves with scale. Read it with
+#   uv run projects/gpt/cli.py fit-shape --group tinystories-shape-large --flops 4e15 6e15 7.5e15
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_shape_large.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-shape-large
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [3, 6, 12]
+  dim:
+    values: [256, 384, 512]
+  max_flops:
+    value: 8.0e+15
+  lr:
+    value: 2.0e-3
+  lr_width_exp:
+    value: 1.0
+  val_every:
+    value: 200
+  val_tokens:
+    value: 524288
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-shape-large
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}

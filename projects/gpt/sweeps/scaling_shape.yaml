@@ -1,0 +1,42 @@
+# Scaling-law study, shape: does the depth/width split matter? Every depth x width pair in the grid (width 128 to 384 as 2 to 12 layers;
+# 0.9M to 23M parameters, aspect ratio width / layers from 11 to 192) is trained to the same 3e15 FLOPs, about the compute-optimal size at
+# that budget for the 3 to 5 layer ladder runs. With a constant LR and an EMA the validation rows are the results for every smaller budget
+# too, so `cli.py fit-shape` compares the shapes at 1e15, 2e15 and 3e15 FLOPs: at equal compute, not equal parameters, which is the
+# comparison that counts (a wider network sees fewer tokens). The LR is the ladder's rule (2e-3 at width 256, falling as 1 / width), the same
+# for every depth; the grid cells at 8 to 12 layers of width 384 are too large for 3e15 FLOPs (under 3e7 tokens) and are left out of the fit.
+# A smaller validation set (524,288 tokens, the same windows in every run) and a validation every 200 steps keep the checks cheap.
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_shape.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-shape
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [2, 3, 4, 6, 8, 12]
+  dim:
+    values: [128, 192, 256, 384]
+  max_flops:
+    value: 3.0e+15
+  lr:
+    value: 2.0e-3
+  lr_width_exp:
+    value: 1.0
+  val_every:
+    value: 200
+  val_tokens:
+    value: 524288
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-shape
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}

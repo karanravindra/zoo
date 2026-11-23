@@ -1,0 +1,39 @@
+# Scaling-law study, shape: seed noise at the shape grid's budget. Two more seeds (1 and 2; the grid is seed 0) of two aspect-64 cells of the
+# grid (4 layers x 256 and 6 layers x 384), so `fit-shape` can say whether a gap between shapes is more than the seed. Same group as the grid.
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_shape_seeds.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-shape-seeds
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [4, 6]
+  seed:
+    values: [1, 2]
+  aspect:
+    value: 64
+  max_flops:
+    value: 3.0e+15
+  lr:
+    value: 2.0e-3
+  lr_width_exp:
+    value: 1.0
+  val_every:
+    value: 200
+  val_tokens:
+    value: 524288
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-shape
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}

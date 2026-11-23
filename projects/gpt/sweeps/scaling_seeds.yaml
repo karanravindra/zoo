@@ -1,0 +1,38 @@
+# Scaling-law study, step 2c: seed noise. Two more seeds (1 and 2; the ladder is seed 0) of the 3-layer and 4-layer ladder runs, so
+# `fit-scaling` can say how much of a gap between sizes is the seed (a different initialization and data order) rather than size.
+# Same group as the ladder.
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_seeds.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+program: projects/gpt/cli.py
+method: grid
+name: scaling-seeds
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [3, 4]
+  seed:
+    values: [1, 2]
+  aspect:
+    value: 64
+  max_flops:
+    value: 1.0e+17
+  lr:
+    value: 2.0e-3
+  lr_width_exp:
+    value: 1.0
+  val_every:
+    value: 500
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: tinystories-ladder
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}
