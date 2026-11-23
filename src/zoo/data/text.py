@@ -1,22 +1,28 @@
-"""Token corpora cached on disk, mirroring what `ImageDataset` does for images (tokenizer-agnostic).
+"""Token corpora cached on disk as shards, mirroring what `ImageDataset` does for images (tokenizer-agnostic).
 
-`write_token_corpus` streams token-id sequences into `<cache_dir>/<split>/tokens.npy` (uint16 if the vocab fits,
-else uint32) plus `meta.json`, without holding the corpus in RAM. `TokenDataset` memory-maps that file and returns
-random next-token windows. Sequences are simply concatenated, so put any end-of-text id in the sequences yourself.
-If every document ends with such a delimiter id, `TokenDataset.doc_batch` returns windows that start at a document.
+`write_token_corpus` streams token-id sequences into `<cache_dir>/<split>/shard_0000.npy, shard_0001.npy, ...` (uint16
+if the vocab fits, else uint32) plus `meta.json`, holding at most about `shard_tokens` tokens in RAM. A shard closes
+at a sequence boundary once it has `shard_tokens` tokens, so keep sequences small (a document, or a few thousand of
+them) for even shards. `Shards` is the read side: the shards as one logical, memory-mapped token array. Caches
+written before sharding (a single `tokens.npy`) still load. `TokenDataset` returns random next-token windows.
+Sequences are simply concatenated, so put any end-of-text id in the sequences yourself. If every document ends with
+such a delimiter id, `TokenDataset.doc_batch` returns windows that start at a document.
 """
 
 from __future__ import annotations
 
 import json
 import os
+from bisect import bisect_right
 from collections.abc import Callable, Iterable, Sequence
+from itertools import accumulate
 from pathlib import Path
 
 import numpy as np
 import torch
-from numpy.lib.format import open_memmap
 from tqdm import tqdm
+
+SHARD_TOKENS = 1 << 28  # about 268M tokens: 512 MB as uint16
 
 
 def write_token_corpus(
@@ -25,41 +31,109 @@ def write_token_corpus(
     split: str,
     vocab_size: int,
     extra_meta: dict | Callable[[], dict] | None = None,
-    chunk: int = 1 << 24,
+    shard_tokens: int = SHARD_TOKENS,
 ) -> Path:
-    """Write `sequences` (iterable of token-id arrays/lists) to `<cache_dir>/<split>/tokens.npy` and `meta.json`.
+    """Write `sequences` (iterable of token-id arrays/lists) to `<cache_dir>/<split>/shard_NNNN.npy` and `meta.json`.
 
     `extra_meta` is merged into meta.json (e.g. the UTF-8 byte count of the raw text). Pass a callable to compute
-    it after the stream is consumed, since the iterable is only read inside this function."""
+    it after the stream is consumed, since the iterable is only read inside this function. meta.json also lists
+    the shards (`shards`: file and length of each), the total `length` and `num_items`. Whatever the split held
+    before (shards or a legacy tokens.npy) is removed first."""
     out = Path(cache_dir) / split
     out.mkdir(parents=True, exist_ok=True)
+    for old in [*out.glob("shard_*.npy"), out / "tokens.npy", *out.glob("delim_*.npy")]:
+        old.unlink(missing_ok=True)
     dtype = np.dtype(np.uint16 if vocab_size <= 2**16 else np.uint32)
-    raw, n, n_items = out / "tokens.raw.tmp", 0, 0
-    with open(raw, "wb") as f, tqdm(desc=f"{split}: write", unit="tok", unit_scale=True) as bar:
-        for seq in sequences:  # length is unknown up front, so stream to a flat file first
+    shards: list[dict] = []
+    buf: list[np.ndarray] = []
+    buffered, n_items = 0, 0
+
+    def flush() -> None:
+        nonlocal buffered
+        if not buf:
+            return
+        name = f"shard_{len(shards):04d}.npy"
+        tmp = out / (name + ".tmp")
+        with open(tmp, "wb") as f:
+            np.save(f, np.concatenate(buf).astype(dtype))
+        os.replace(tmp, out / name)
+        shards.append({"file": name, "length": buffered})
+        buf.clear()
+        buffered = 0
+
+    with tqdm(desc=f"{split}: write", unit="tok", unit_scale=True) as bar:
+        for seq in sequences:
             a = np.asarray(seq, dtype=np.int64)
             if len(a) and (a.min() < 0 or a.max() >= vocab_size):
                 raise ValueError(f"token id outside [0, {vocab_size})")
-            f.write(a.astype(dtype).tobytes())
-            n, n_items = n + len(a), n_items + 1
+            buf.append(a)
+            buffered += len(a)
+            n_items += 1
             bar.update(len(a))
-    flat = np.memmap(raw, dtype=dtype, mode="r", shape=(n,)) if n else np.empty(0, dtype)
-    arr = open_memmap(out / "tokens.npy", mode="w+", dtype=dtype, shape=(n,))
-    with tqdm(total=n, desc=f"{split}: copy", unit="tok", unit_scale=True) as bar:
-        for i in range(0, n, chunk):
-            arr[i : i + chunk] = flat[i : i + chunk]
-            bar.update(min(chunk, n - i))
-    arr.flush()
-    del arr, flat
-    os.remove(raw)
+            if buffered >= shard_tokens:
+                flush()
+        flush()
     extra = extra_meta() if callable(extra_meta) else (extra_meta or {})
-    meta = {"length": n, "num_items": n_items, "vocab_size": vocab_size, "dtype": dtype.name, **extra}
+    meta = {
+        "length": sum(s["length"] for s in shards),
+        "num_items": n_items,
+        "vocab_size": vocab_size,
+        "dtype": dtype.name,
+        "shards": shards,
+        **extra,
+    }
     (out / "meta.json").write_text(json.dumps(meta, indent=2))
     return out
 
 
+class Shards:
+    """The shards of one split as a single read-only token array: `len`, and `[i]` / `[i:j]` by global position.
+
+    A slice that crosses a shard boundary is stitched together, so shards behave as if concatenated. Each shard is
+    memory-mapped, so nothing is read until it is indexed. Opens a legacy single `tokens.npy` as one shard."""
+
+    def __init__(self, split_dir: str | Path) -> None:
+        self.dir = Path(split_dir)
+        meta = json.loads((self.dir / "meta.json").read_text())
+        files = [s["file"] for s in meta["shards"]] if "shards" in meta else ["tokens.npy"]
+        self.arrays = [np.load(self.dir / f, mmap_mode="r") for f in files]
+        self.starts = [0, *accumulate(len(a) for a in self.arrays)]  # global start of each shard, then the total
+        self.dtype = self.arrays[0].dtype if self.arrays else np.dtype(np.uint16)
+
+    def __getstate__(self) -> dict:  # DataLoader workers re-open the memmaps instead of pickling their contents
+        return {"dir": self.dir}
+
+    def __setstate__(self, state: dict) -> None:
+        self.__init__(state["dir"])
+
+    def __len__(self) -> int:
+        return self.starts[-1]
+
+    def __getitem__(self, key: int | slice) -> np.ndarray | np.integer:
+        n = len(self)
+        if isinstance(key, int):
+            if not -n <= key < n:
+                raise IndexError(key)
+            key %= n
+            s = bisect_right(self.starts, key, 0, len(self.arrays)) - 1
+            return self.arrays[s][key - self.starts[s]]
+        start, stop, step = key.indices(n)
+        if step != 1:
+            raise ValueError("Shards only supports contiguous slices")
+        if stop <= start:
+            return np.empty(0, self.dtype)
+        first = bisect_right(self.starts, start, 0, len(self.arrays)) - 1
+        parts = []
+        for s in range(first, len(self.arrays)):
+            lo, hi = self.starts[s], self.starts[s + 1]
+            if lo >= stop:
+                break
+            parts.append(self.arrays[s][max(start, lo) - lo : min(stop, hi) - lo])
+        return parts[0] if len(parts) == 1 else np.concatenate(parts)
+
+
 class TokenDataset:
-    """Random `(x, y)` next-token windows from a corpus written by `write_token_corpus`.
+    """Random `(x, y)` next-token windows from a corpus written by `write_token_corpus` (sharded or not).
 
     `batch(batch_size)` returns int64 tensors of shape (batch_size, block_size) on `device`, with y = x shifted by
     one. Window starts come from a generator seeded with `seed` (`reset` restarts it), so val batches repeat."""
@@ -68,7 +142,7 @@ class TokenDataset:
         d = Path(cache_dir) / split
         self.dir, self._delims = d, {}
         self.meta = json.loads((d / "meta.json").read_text())
-        self.tokens = np.load(d / "tokens.npy", mmap_mode="r")
+        self.tokens = Shards(d)
         if len(self.tokens) <= block_size:
             raise ValueError(f"{split}: {len(self.tokens)} tokens is too few for block_size {block_size}")
         self.block_size, self.device, self.seed = block_size, device, seed
@@ -86,7 +160,7 @@ class TokenDataset:
         return self._to_device(torch.from_numpy(w[:, :-1]), torch.from_numpy(w[:, 1:]))
 
     def delimiters(self, delim_id: int) -> np.ndarray:
-        """Sorted positions of `delim_id` in the corpus (found once, then cached next to tokens.npy)."""
+        """Sorted positions of `delim_id` in the corpus (found once, then cached next to the shards)."""
         if delim_id not in self._delims:
             path = self.dir / f"delim_{delim_id}.npy"
             if not path.exists():
