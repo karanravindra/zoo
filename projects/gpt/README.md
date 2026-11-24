@@ -30,7 +30,7 @@ dominated by the initial weights.
 | `prepare` | Streams a dataset into temporary text shards, trains a byte-level BPE with gigatoken, encodes every shard and writes the token shards. `--dataset tinystories` (default) or `fineweb-edu` (the 10BT sample, 10,000 documents held out for validation, 32,768 tokens); `--max-docs` caps the training documents. |
 | `pretrain` | Trains on the corpus. Takes the vocabulary and end-of-text id from it. Checkpoints the best by `val/loss`. `--aspect A` sizes the model by `--n-layers` alone (width = A x layers), `--max-flops C` trains to a compute budget (steps = C / (FLOPs per token x `--global-batch`), at most one pass over the corpus), and `--lr-width-exp p` scales the peak LR by `(256 / width) ** p`, so one learning-rate rule covers a ladder of sizes. |
 | `sample` | Continues a prompt from a checkpoint (the EMA weights when the run had `--ema`). |
-| `fit-lr` | Scaling study, step 1: from the finished runs of a learning-rate sweep, the best peak LR at each width and one rule `LR*(width)`, with the flags to use it. |
+| `fit-lr` | Scaling study, step 1: from the finished runs of a learning-rate sweep, the best peak LR at each width and one rule `LR*(width)`, with the flags to use it (`--steps 2500 5000` reads every run at those steps too: with a constant LR and an EMA a run's first k steps are a k-step run). |
 | `fit-scaling` | Scaling study, step 2: on a ladder sweep, seed noise, IsoFLOP profiles, the law `L(N, D) = E + A N^-alpha + B D^-beta` with bootstrap error bars and the compute-optimal split, and held-out checks (`--lr rule`: every size at the rule's LR instead of its best). |
 | `check-anneal` | Scaling study, step 3: constant LR with EMA against a run that anneals its LR to zero over the same steps. |
 | `fit-shape` | Scaling study, shape: at equal compute, the loss against depth x width (a fitted surface, the best aspect ratio at each size), MLP size, head size and context length, with seed noise. |
@@ -314,3 +314,22 @@ Tokens per step and the LR (8,192 and 32,768 tokens per step with five and four 
   0.999 about 0.005 better here, 0.9 0.008 worse; 0.95 is the safe choice at a high LR), warmup 200 (50 the same, 1,000 worse early), gradient clipping 1.0
   (off and 0.3 are the same within 0.002: not a lever here; keep it for stability at a high LR).
 - Noise: single-run noise is 0.005, so decide anything under 0.01 with two or more seeds.
+
+### FineWeb-Edu
+
+The study moves to FineWeb-Edu (the `sample-10BT` subset, `--dataset fineweb-edu`: a 32,768-token byte-level BPE, 10,000 documents held out for
+validation). What changes against TinyStories, and what the TinyStories results above say to do about it:
+- Context 1024 (`--block-size 1024 --micro-tokens 16384`, so the micro-batch stays the step's 16,384 tokens). TinyStories could not say anything about
+  context length or the document mask.
+- The vocabulary is 8x larger, so the tied embedding is a large share of a small model's parameters (32,768 x width: 8.4M of 11.6M at 4 layers and 256 wide)
+  and the output layer a large share of its FLOPs. `--max-flops` counts them; read `fit-scaling` with `--params body` too.
+- The learning rate is re-fitted, at the length the runs will have: `scaling_fineweb_lr.yaml` (4, 6, 8 layers x 5 LRs, 10,000 steps), read with
+  `uv run projects/gpt/cli.py fit-lr --group fineweb-lr --steps 2500 5000 10000`. On TinyStories the best constant LR fell with the run length
+  and the rule from 5,000-step runs was 0.015 to 0.021 too high at 29,500 steps; a bracket of x0.35 to x1.4 is run so that the edge is not the best.
+- Then, in this order: the ladder at that LR with annealed branches (so the law is fitted on what real runs do, not on constant-LR + EMA curves), seeds at two sizes, and
+  weight decay / beta2 at the real length.
+
+The corpus is built (`prepare --dataset fineweb-edu`, about an hour): 9.98B training tokens in 35 shards (9,662,101 documents, 45.9 GB of text, 0.217
+tokens per byte against TinyStories' 0.254, a mean document of about 1,030 tokens) and 10.4M validation tokens (10,000 documents), 18 GB on disk, so any run of the
+ladder is a fraction of one pass. It lives in `<DATA_ROOT>/gpt/fineweb-edu/`. `prepare` writes about 45 GB of temporary text shards while it runs (deleted at the end) and about 20 GB of
+token shards, so it needs the big disk: `data/` and `runs/` are symlinks to `/mnt/ai/zoo/data` and `/mnt/ai/zoo/runs` (see `CLAUDE.md`), which is where the corpus and the runs live.

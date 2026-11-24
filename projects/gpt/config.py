@@ -167,6 +167,7 @@ class ShapeConfig:
 
     group: str = "tinystories-shape"  # W&B group of the shape sweeps (sweeps/scaling_shape*.yaml, scaling_ff.yaml, ...)
     flops: tuple[float, ...] = (1e15, 2e15, 2.5e15)  # training budgets to compare the shapes at (read off each run's validation curve)
+    steps: tuple[int, ...] = ()  # read every run's validation loss at these optimizer steps (a constant LR with an EMA makes the first k steps of a long run the same as a k-step run); () = the last step of each run
     min_tokens: float = 1e7  # a run is left out of a budget it reaches with fewer tokens than this (3x the 200-step warmup: the warmup would decide its loss); 1e7 keeps the largest cells of the grid (22.8M parameters is 1.7e7 tokens at 2.5e15 FLOPs), 3e7 drops everything above about 12M
     ladder: str = "tinystories-ladder"  # W&B group of the ladder, to check that its aspect-64 runs agree with the grid's ("" = skip)
     lr_group: str = "tinystories-shape-lr"  # W&B group of the depth x LR runs (sweeps/scaling_shape_lr.yaml), read with the grid's rule-LR runs of the same width ("" = skip)
