@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
+
+from tyro.conf import Positional
 
 from zoo.training import RunConfig
 
+Task = Literal["val", "wikitext", "pg19", "blimp", "arc_easy", "arc_challenge", "mmlu", "hellaswag", "piqa", "sciq", "lambada"]
+ALL_TASKS: tuple[str, ...] = get_args(Task)  # the evaluation suite (`evals.py`)
+TASKS_BY_CORPUS = {"tinystories": ("val", "blimp")}  # the default tasks of a corpus; any other gets them all (the knowledge sets mean nothing to a model of 4,096-token children's stories)
 LR_REF_DIM = 256  # the width that `lr` is the peak for when `lr_width_exp` is set
 VAL_ALIGN = 64  # the validation set is a multiple of this many windows, so every micro-batch size up to it divides it
 
@@ -137,11 +142,32 @@ class PrepareConfig:
 
 
 @dataclass
+class PrepareEvalsConfig:
+    """Download the evaluation sets (the ones already in the HF cache are skipped) and save the validation documents' metadata, so `eval` runs from local files."""
+
+    dataset: str = "fineweb-edu"  # the corpus whose validation documents get their URL and edu score saved (validation/docs.json), for the per-slice losses; "" = skip
+
+
+@dataclass
+class EvalConfig:
+    """Score checkpoints on the evaluation suite (`evals.py`): loss sets in bits per byte, and zero-shot multiple choice by log-likelihood. Writes eval.json to the run directory."""
+
+    ckpts: Positional[tuple[Path, ...]]  # checkpoints, or run directories (their checkpoints/last.ckpt)
+    tasks: tuple[Task, ...] = ()  # () = every task, or val and blimp for a TinyStories model; val = the corpus's own validation split, sliced
+    limit: int = 0  # > 0: only this many items per task (per paradigm for blimp), for a quick check
+    limit_tokens: int = 0  # > 0: the loss sets (val, wikitext, pg19) score only this many tokens
+    pg19_chars: int = 40_000  # characters of each of the 100 test books (from the middle) in the pg19 set: about 1M tokens
+    batch_tokens: int = 32_768  # tokens per forward pass (lower it if the GPU runs out of memory)
+    wandb: bool = True  # also write the numbers to the run's W&B summary, as eval/<task>/<metric> (WANDB_MODE=offline when unreachable)
+
+
+@dataclass
 class LRFitConfig:
     """The best peak learning rate at each width of the learning-rate sweep, and one rule for all of them (`scaling.py`)."""
 
     group: str = "tinystories-lr"  # W&B group of the sweep (sweeps/scaling_lr.yaml); its finished runs are read from <runs>/gpt/
     near: float = 0.12  # a run joins the rule's regression when its loss is within this of its width's best
+    steps: tuple[int, ...] = ()  # read every run's validation loss at these optimizer steps (a constant LR with an EMA makes the first k steps of a long run the same as a k-step run); () = the last step of each run
     out: Path | None = None  # figures and results.json (default <runs>/gpt/scaling/<group>)
 
 
@@ -167,7 +193,6 @@ class ShapeConfig:
 
     group: str = "tinystories-shape"  # W&B group of the shape sweeps (sweeps/scaling_shape*.yaml, scaling_ff.yaml, ...)
     flops: tuple[float, ...] = (1e15, 2e15, 2.5e15)  # training budgets to compare the shapes at (read off each run's validation curve)
-    steps: tuple[int, ...] = ()  # read every run's validation loss at these optimizer steps (a constant LR with an EMA makes the first k steps of a long run the same as a k-step run); () = the last step of each run
     min_tokens: float = 1e7  # a run is left out of a budget it reaches with fewer tokens than this (3x the 200-step warmup: the warmup would decide its loss); 1e7 keeps the largest cells of the grid (22.8M parameters is 1.7e7 tokens at 2.5e15 FLOPs), 3e7 drops everything above about 12M
     ladder: str = "tinystories-ladder"  # W&B group of the ladder, to check that its aspect-64 runs agree with the grid's ("" = skip)
     lr_group: str = "tinystories-shape-lr"  # W&B group of the depth x LR runs (sweeps/scaling_shape_lr.yaml), read with the grid's rule-LR runs of the same width ("" = skip)

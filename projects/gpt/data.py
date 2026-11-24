@@ -63,6 +63,15 @@ class Windows(Dataset):
         return torch.from_numpy(self.tokens[start : start + self.block_size + 1].astype(np.int64))
 
 
+def val_window_ids(n_windows: int, block_size: int, val_tokens: int) -> list[int]:
+    """The windows of the validation split that `val/loss` is measured on: evenly spaced, the same in every run.
+
+    The count depends on `val_tokens` only, and is a multiple of VAL_ALIGN so that no micro-batch size leaves a short
+    last batch (a new shape to compile)."""
+    n = min(n_windows, max(VAL_ALIGN, val_tokens // block_size // VAL_ALIGN * VAL_ALIGN))
+    return np.linspace(0, n_windows - 1, n).astype(int).tolist()
+
+
 class GPTData(L.LightningDataModule):
     def __init__(self, cfg: Config):
         super().__init__()
@@ -76,10 +85,7 @@ class GPTData(L.LightningDataModule):
         root, bs = corpus_dir(self.cfg.dataset), self.cfg.block_size
         self.train_ds = Windows(root / "train", bs)
         val = Windows(root / "validation", bs)
-        # The same evenly spaced windows in every run, whatever the micro-batch: the count depends on val_tokens only,
-        # and is a multiple of VAL_ALIGN so that no micro-batch size leaves a short last batch (a new shape to compile).
-        n = min(len(val), max(VAL_ALIGN, self.cfg.val_tokens // bs // VAL_ALIGN * VAL_ALIGN))
-        self.val_ds = Subset(val, np.linspace(0, len(val) - 1, n).astype(int).tolist())
+        self.val_ds = Subset(val, val_window_ids(len(val), bs, self.cfg.val_tokens))
 
     def train_dataloader(self) -> DataLoader:
         n = self.cfg.num_workers
