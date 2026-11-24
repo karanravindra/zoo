@@ -4,7 +4,7 @@ Run from anywhere, after embed.py and visualize.py:
     uv run projects/latent_analysis/export.py --dataset afhq_v2
     uv run projects/latent_analysis/export.py --dataset stargan   # AFHQv2 + CelebA-HQ as one dataset
 then start the explorer:
-    bun run projects/latent_analysis/explorer/server.ts
+    bun run projects/archive/latent_analysis/explorer/server.ts
 Only needs re-running when the embeddings or projections change: k-means results
 (k*/clusters_<split>.json from kmeans.py) are read by the server on every page load.
 
@@ -124,7 +124,7 @@ def main() -> None:
     }
     out.write_text(json.dumps(payload, separators=(",", ":")))
     print(f"wrote {out}")
-    print("start the explorer with:\n  bun run projects/latent_analysis/explorer/server.ts")
+    print("start the explorer with:\n  bun run projects/archive/latent_analysis/explorer/server.ts")
 
 
 if __name__ == "__main__":

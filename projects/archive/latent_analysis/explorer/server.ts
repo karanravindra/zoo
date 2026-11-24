@@ -2,7 +2,7 @@
  * Latent explorer: browse projected embeddings, inspect the images behind the points,
  * and tag them.
  *
- *   bun run projects/latent_analysis/explorer/server.ts [points.json] [--port 3000]
+ *   bun run projects/archive/latent_analysis/explorer/server.ts [points.json] [--port 3000]
  *
  * With no points file, opens the most recently exported one under runs/latent_analysis
  * (<dataset>/<model>/explorer/<split>.json, written by export.py). Every k-means run next
@@ -25,7 +25,7 @@ import { basename, dirname, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import index from "./index.html";
 
-const REPO = resolve(import.meta.dir, "../../..");
+const REPO = resolve(import.meta.dir, "../../../..");
 const DATA = resolve(REPO, "data");
 
 const { values, positionals } = parseArgs({
