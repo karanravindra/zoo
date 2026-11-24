@@ -1,0 +1,25 @@
+# Drafter comparison: method x draft length x depth. Create it once, then start agents:
+#   uv run wandb sweep --project fastdocling projects/fastdocling/sweeps/drafters.yaml
+#   uv run wandb agent <entity>/fastdocling/<sweep id>
+# Compare on val/accept_len (extra tokens accepted per target pass), then confirm speed with `bench` (a bigger accept_len
+# on a bigger drafter can still lose on wall-clock).
+program: projects/fastdocling/cli.py
+method: grid
+metric:
+  name: val/accept_len
+  goal: maximize
+parameters:
+  drafter:
+    values: [mtp]  # add eagle3, ... as they land in drafters/
+  k:
+    values: [2, 4, 6]
+  n_layers:
+    values: [1, 2]
+  group:
+    value: drafters-sweep
+command:
+  - uv
+  - run
+  - ${program}
+  - train
+  - ${args}

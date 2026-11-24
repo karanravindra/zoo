@@ -1,0 +1,23 @@
+# EAGLE-3 over draft length and learning rate (try `--feature-layers` by hand: a tuple flag does not survive ${args}). Create it once, then start agents:
+#   uv run wandb sweep --project fastdocling projects/fastdocling/sweeps/eagle3.yaml
+#   uv run wandb agent <entity>/fastdocling/<sweep id>
+program: projects/fastdocling/cli.py
+method: grid
+metric:
+  name: val/accept_len
+  goal: maximize
+parameters:
+  drafter:
+    value: eagle3
+  k:
+    values: [3, 5]
+  lr:
+    values: [5.0e-4, 1.0e-3, 2.0e-3]
+  group:
+    value: eagle3-sweep
+command:
+  - uv
+  - run
+  - ${program}
+  - train
+  - ${args}
