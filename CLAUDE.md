@@ -42,6 +42,12 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
 - `dev: bool = False` makes a throwaway run: `make_trainer` skips W&B and checkpoints and uses a temp directory deleted on exit.
 - `cfg.ema > 0` makes `make_trainer` add `zoo.training.EMA` (don't deepcopy the model for averaging). It updates once per optimizer step (not per accumulated micro-batch) and warms up: the decay is `min(cfg.ema, (1 + n) / (10 + n))` after `n` updates, so the window is about a ninth of the steps so far until it reaches the cap (a run's first k steps then do not depend on its planned length, and a very high `ema` such as 0.99999 only caps the window). Validation and test use the average, so the best checkpoint is chosen on it; checkpoints hold the live weights, and the average is saved under `callbacks["EMA"]` (`EMA.load_from_checkpoint(path).load_into(model)` applies it).
 
+## Storage
+
+- Use `/mnt/ai` (the big disk) for everything large: datasets and caches in `/mnt/ai/zoo/data` (`DATA_ROOT`), runs and checkpoints in `/mnt/ai/zoo/runs` (`RUNS_ROOT`), HF downloads in `/mnt/ai/data/hf` (`HF_HOME`). The local disk is small: nothing big goes on it, the temporary files of a big job included.
+- `data/` and `runs/` in the repo are symlinks (gitignored) to `/mnt/ai/zoo/data` and `/mnt/ai/zoo/runs`, so the files can be browsed and run outputs viewed from the editor. Write to `data/…` and `runs/…` as usual and never replace a symlink with a real directory. Before a big write, and on a fresh checkout, check `readlink -f data runs` and `df -h`; if one is a real directory, move its contents to `/mnt/ai` and recreate the symlink first.
+- Cheap CPU checks that make a run directory point `ZOO_RUNS_ROOT` at the scratchpad.
+
 ## Run outputs
 
 - Metrics, config, git state, system stats (GPU utilisation, memory, power, temperature) and console output live in W&B. The W&B project is the project folder's name; use `group` for the stage or sweep, `name` and `tags` to tell runs apart.
@@ -49,7 +55,6 @@ Personal ML experiments. Shared library code lives in `src/zoo/`; each experimen
 - Log metrics as `train/…`, `val/…`, `test/…`, with `lr-…`, `perf/…` and `stats/…` coming from the callbacks. Score the test set once, with the checkpoint chosen on validation (`trainer.test(..., ckpt_path="best")`).
 - Log images and other media to W&B (`wandb.Image`), not to PNG files in the run directory. Plots saved as files are PNGs; never call `plt.show()`.
 - Credentials come from the environment (`WANDB_API_KEY`, `WANDB_ENTITY`, and `WANDB_MODE=offline` when unreachable; upload later with `wandb sync <dir>`). Never write a key into the repo. `wandb login` is interactive, so the user runs it.
-- `runs/` is a symlink to `/mnt/ai/zoo/runs` (the big disk) and `data/` (`DATA_ROOT`) to `/mnt/ai/zoo/data`; the local disk is small. HF downloads already go to `/mnt/ai/data/hf` (`HF_HOME`). Cheap CPU checks that make a run directory point `ZOO_RUNS_ROOT` at the scratchpad.
 
 ## Git
 
