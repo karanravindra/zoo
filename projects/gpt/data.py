@@ -12,6 +12,7 @@ import torch
 from config import VAL_ALIGN, Config
 from torch.utils.data import DataLoader, Dataset, Subset
 
+from zoo.artifacts import current_build
 from zoo.data.text import Shards
 from zoo.paths import DATA_ROOT
 
@@ -21,19 +22,30 @@ IM_END = "<|im_end|>"
 SPECIALS = [EOT, IM_START, IM_END]  # ids 256, 257, 258
 
 
-def corpus_dir(dataset: str) -> Path:
+def corpus_root(dataset: str) -> Path:
     return DATA_ROOT / "gpt" / dataset
 
 
-def load_meta(dataset: str, split: str) -> dict:
-    path = corpus_dir(dataset) / split / "meta.json"
+def corpus_dir(dataset: str) -> Path:
+    return current_build(corpus_root(dataset))
+
+
+def checkpoint_corpus(cfg: Config) -> Path:
+    root = corpus_root(cfg.dataset)
+    if cfg.corpus_build is not None:
+        return root / cfg.corpus_build
+    return root if (root / "tokenizer.json").is_file() else current_build(root)
+
+
+def load_meta(dataset: str, split: str, *, root: Path | None = None) -> dict:
+    path = (root if root is not None else corpus_dir(dataset)) / split / "meta.json"
     if not path.exists():
         raise SystemExit(f"{path} does not exist: run `uv run projects/gpt/cli.py prepare --dataset {dataset}` first")
     return json.loads(path.read_text())
 
 
-def load_tokenizer(dataset: str) -> gt.Tokenizer:
-    return gt.Tokenizer(corpus_dir(dataset) / "tokenizer.json")
+def load_tokenizer(dataset: str, *, root: Path | None = None) -> gt.Tokenizer:
+    return gt.Tokenizer((root if root is not None else corpus_dir(dataset)) / "tokenizer.json")
 
 
 class Windows(Dataset):
@@ -73,16 +85,17 @@ def val_window_ids(n_windows: int, block_size: int, val_tokens: int) -> list[int
 
 
 class GPTData(L.LightningDataModule):
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, root: Path | None = None):
         super().__init__()
         self.cfg = cfg
+        self.root = root if root is not None else corpus_dir(cfg.dataset)
 
     def prepare_data(self) -> None:
-        load_meta(self.cfg.dataset, "train")  # fails with the command to run if `prepare` has not been
-        load_meta(self.cfg.dataset, "validation")
+        load_meta(self.cfg.dataset, "train", root=self.root)  # fails with the command to run if `prepare` has not been
+        load_meta(self.cfg.dataset, "validation", root=self.root)
 
     def setup(self, stage: str | None = None) -> None:
-        root, bs = corpus_dir(self.cfg.dataset), self.cfg.block_size
+        root, bs = self.root, self.cfg.block_size
         self.train_ds = Windows(root / "train", bs)
         val = Windows(root / "validation", bs)
         self.val_ds = Subset(val, val_window_ids(len(val), bs, self.cfg.val_tokens))
