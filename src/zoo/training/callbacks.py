@@ -112,7 +112,8 @@ class ThroughputMonitor(Callback):
         self.tp = Throughput()
 
     def on_train_start(self, trainer, pl_module) -> None:
-        self.tp.restart()
+        self._step = trainer.global_step
+        self.tp.restart(self._step)
 
     def on_validation_start(self, trainer, pl_module) -> None:
         self.tp.pause()
@@ -121,9 +122,13 @@ class ThroughputMonitor(Callback):
         self.tp.resume()
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx) -> None:
-        if trainer.global_step % self.every == 0:
+        step = trainer.global_step
+        if step == self._step:
+            return
+        self._step = step
+        if step % self.every == 0:
             # Lightning has synced the device by the time it logs, and `self.log` below forces it for this step.
-            pl_module.log("perf/steps_per_s", self.tp.tick(trainer.global_step), on_step=True, on_epoch=False)
+            pl_module.log("perf/steps_per_s", self.tp.tick(step), on_step=True, on_epoch=False)
 
 
 class ParamStatsMonitor(Callback):

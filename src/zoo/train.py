@@ -27,9 +27,9 @@ class Throughput:
     def __init__(self) -> None:
         self.restart()
 
-    def restart(self) -> None:
+    def restart(self, step: int = 0) -> None:
         self.t0 = self.t_log = time.perf_counter()
-        self.n_log = 0
+        self.n_log = step
         self._paused_at: float | None = None
 
     def pause(self) -> None:
