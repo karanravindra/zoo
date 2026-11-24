@@ -93,30 +93,30 @@ Evaluation, every `--eval-every` steps (about 10M tokens) and at the end:
 
 ```bash
 # 1. Quick check of the trainer: about 5M tokens, evals every 2M.
-uv run projects/lfm_sae/train_sae.py --num-tokens 5000000 --eval-every 500
+uv run projects/archive/lfm_sae/train_sae.py --num-tokens 5000000 --eval-every 500
 
 # 2. Full run: 100M tokens of resid_post.12.
-uv run projects/lfm_sae/train_sae.py
+uv run projects/archive/lfm_sae/train_sae.py
 
 # Several sizes side by side on the same activations (the language model runs once): 8x, 16x, 32x.
 # Each SAE uses lr / sqrt(n_latents / 16384). About 2.3 h for 100M tokens (the SAE steps become the limit).
-uv run projects/lfm_sae/train_sae.py --n-latents 16384 32768 65536
+uv run projects/archive/lfm_sae/train_sae.py --n-latents 16384 32768 65536
 
 # Other settings: --layer 6 --site mlp_out, --k 32.
 
 # 3. What each latent responds to, on the 8192 held-out documents (about 5.2M tokens, 3 min).
-uv run projects/lfm_sae/features.py --checkpoint runs/lfm_sae/train/<timestamp>/sae_16384/best.pt
+uv run projects/archive/lfm_sae/features.py --checkpoint runs/lfm_sae/train/<timestamp>/sae_16384/best.pt
 
 # UMAP and cross-size neighbors for every SAE in the run, then the viewer (http://localhost:3002).
-uv run projects/lfm_sae/layout.py --run runs/lfm_sae/train/<timestamp>
-bun run projects/lfm_sae/viewer/server.ts
+uv run projects/archive/lfm_sae/layout.py --run runs/lfm_sae/train/<timestamp>
+bun run projects/archive/lfm_sae/viewer/server.ts
 
 # 4. Held-out activations on disk, for feature browsing (5M tokens, about 20 GB on /mnt/ai).
-uv run projects/lfm_sae/extract.py
+uv run projects/archive/lfm_sae/extract.py
 
 # If an extraction stops (crash, Ctrl-C), continue it. The saved config is used; only --device and --compile
 # come from the command line.
-uv run projects/lfm_sae/extract.py --resume runs/lfm_sae/extract/<timestamp>
+uv run projects/archive/lfm_sae/extract.py --resume runs/lfm_sae/extract/<timestamp>
 ```
 
 ## Output
@@ -150,7 +150,7 @@ these.
 
 ## Viewer
 
-`bun run projects/lfm_sae/viewer/server.ts` (`--port`, default 3002; `--runs`, default `runs/lfm_sae/train`) serves
+`bun run projects/archive/lfm_sae/viewer/server.ts` (`--port`, default 3002; `--runs`, default `runs/lfm_sae/train`) serves
 every SAE that has a `features.json`. Files are re-read when they change.
 
 - **Top bar:** the run's SAE sizes, and the SAE's FVU, loss recovered, live latents and labeled count.

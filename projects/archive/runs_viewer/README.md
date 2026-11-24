@@ -4,8 +4,8 @@ A local experiment dashboard for everything under `<repo>/runs/`, in the style o
 live metric charts, run comparison, a runs table and per-run pages. Bun only, no dependencies to install.
 
 ```sh
-bun run projects/runs_viewer/server.ts            # http://localhost:3001
-bun run projects/runs_viewer/server.ts --port 4000
+bun run projects/archive/runs_viewer/server.ts            # http://localhost:3001
+bun run projects/archive/runs_viewer/server.ts --port 4000
 ```
 
 ## What counts as a run
