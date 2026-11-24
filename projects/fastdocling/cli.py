@@ -42,7 +42,7 @@ def train(cfg: TrainConfig) -> None:
     print(f"Drafter {cfg.drafter}: {n / 1e6:.1f}M parameters, k={cfg.k}")
     trainer = make_trainer(cfg, PROJECT, stage=cfg.drafter, monitor="val/accept_len", mode="max")
     datamodule = DistillData(cfg)
-    trainer.fit(module, datamodule)
+    trainer.fit(module, datamodule, ckpt_path=cfg.resume)
 
 
 def bench(cfg: BenchConfig) -> None:

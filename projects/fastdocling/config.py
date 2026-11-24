@@ -37,6 +37,7 @@ class TrainConfig(RunConfig):
     """Train one drafter against the frozen target. `--drafter` picks the method (see drafters/); the shared knobs below
     are read by every drafter, and a drafter ignores the ones it does not need. Keeps the best checkpoint by val/accept_len."""
 
+    resume: str | None = None  # continue from a run's last.ckpt (same flags as that run): restores weights, optimizer, schedule and step; a new run id
     drafter: str = "mtp"  # registry name in drafters/: mtp, eagle3, ...
     target: str = TARGET
     data: str = str(DATA_DIR)  # prepare's output directory (a str: the config is saved as JSON)
