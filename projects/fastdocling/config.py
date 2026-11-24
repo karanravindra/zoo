@@ -47,7 +47,7 @@ class TrainConfig(RunConfig):
     anchors: int = 128  # blocks per page per step (dflash, dspark); 4x as many at validation, with fixed positions
     loss_gamma: float = 0.0  # decay of the per-position loss weight exp(-j / gamma) (dflash, dspark); 0 = (k + 1) / 2
     markov_rank: int = 256  # rank of dspark's previous-token bias head
-    max_len: int = 3072  # tokens per sequence (image tokens + prompt + DocTags), longer pages are dropped
+    max_len: int = 3072  # tokens per sequence (image tokens + prompt + DocTags), responses are truncated and pages with fewer than two response tokens are dropped
     batch_size: int = 4
     lr: float = 1e-3  # peak of the schedule
     weight_decay: float = 0.0  # AdamW

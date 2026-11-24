@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
 
 import lightning as L
 import torch
@@ -13,6 +12,7 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import AutoProcessor
 
 from config import PROMPT, TrainConfig
+from pages import distill_shards
 
 
 def chat_prompt(processor) -> str:
@@ -41,9 +41,7 @@ class DistillData(L.LightningDataModule):
         self.cfg = cfg
 
     def setup(self, stage: str | None = None) -> None:
-        files = sorted(str(p) for p in Path(self.cfg.data).glob("shard_*.parquet"))
-        if not files:
-            raise SystemExit(f"no shards in {self.cfg.data}; run `cli.py prepare` first")
+        files = distill_shards(self.cfg.data, target=self.cfg.target)
         ds = load_dataset("parquet", data_files=files, split="train")
         n = self.cfg.val_pages
         self.val_ds, self.train_ds = Pages(ds.select(range(n))), Pages(ds.select(range(n, len(ds))))
@@ -53,13 +51,18 @@ class DistillData(L.LightningDataModule):
     def collate(self, rows):
         images = [[Image.open(io.BytesIO(b)).convert("RGB")] for b, _ in rows]
         enc = self.processor(text=[self.prompt] * len(rows), images=images, padding=True, return_tensors="pt")
-        seqs, masks = [], []
+        seqs, masks, kept = [], [], []
         for i, (_, toks) in enumerate(rows):
-            L_i = int(enc["attention_mask"][i].sum())
-            prompt_ids = enc["input_ids"][i, :L_i]
-            resp = torch.tensor(toks, dtype=torch.long)[: max(self.cfg.max_len - L_i, 0)]
+            prompt_ids = enc["input_ids"][i, enc["attention_mask"][i].bool()]
+            prompt_len = len(prompt_ids)
+            resp = torch.tensor(toks[: max(self.cfg.max_len - prompt_len, 0)], dtype=torch.long)
+            if len(resp) < 2:  # one target-provided token followed by at least one draft target
+                continue
+            kept.append(i)
             seqs.append(torch.cat([prompt_ids, resp]))
-            masks.append(torch.cat([torch.zeros(L_i, dtype=torch.bool), torch.ones(len(resp), dtype=torch.bool)]))
+            masks.append(torch.cat([torch.zeros(prompt_len, dtype=torch.bool), torch.ones(len(resp), dtype=torch.bool)]))
+        if not kept:
+            return None
         T = max(len(s) for s in seqs)
         pad = self.processor.tokenizer.pad_token_id
         ids = torch.full((len(seqs), T), pad, dtype=torch.long)
@@ -67,8 +70,9 @@ class DistillData(L.LightningDataModule):
         attn = torch.zeros(len(seqs), T, dtype=torch.long)
         for i, (s, m) in enumerate(zip(seqs, masks)):
             ids[i, : len(s)], resp_mask[i, : len(s)], attn[i, : len(s)] = s, m, 1
-        return dict(input_ids=ids, attention_mask=attn, mask=resp_mask, pixel_values=enc["pixel_values"],
-                    pixel_attention_mask=enc.get("pixel_attention_mask"))
+        pixel_mask = enc.get("pixel_attention_mask")
+        return dict(input_ids=ids, attention_mask=attn, mask=resp_mask, pixel_values=enc["pixel_values"][kept],
+                    pixel_attention_mask=pixel_mask[kept] if pixel_mask is not None else None)
 
     def _loader(self, ds, train: bool) -> DataLoader:
         n = self.cfg.num_workers
