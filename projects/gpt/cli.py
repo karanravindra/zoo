@@ -3,6 +3,8 @@
   uv run projects/gpt/cli.py prepare [--dataset tinystories]   download, train the tokenizer, write token shards
   uv run projects/gpt/cli.py pretrain [flags]                  pretrain on the prepared corpus
   uv run projects/gpt/cli.py sample <checkpoint> [flags]       continue a prompt
+  uv run projects/gpt/cli.py prepare-evals [--dataset ...]     download the evaluation sets, save the validation documents' metadata
+  uv run projects/gpt/cli.py eval <run dir or checkpoint>...   score checkpoints: loss sets, grammar, zero-shot multiple choice; writes eval.json
   uv run projects/gpt/cli.py fit-lr [--group ...]              scaling study: the best learning rate per width, and a rule
   uv run projects/gpt/cli.py fit-scaling [--group ...]         scaling study: IsoFLOP profiles and the L(N, D) law of a ladder sweep
   uv run projects/gpt/cli.py check-anneal [--group ...]        scaling study: constant LR with EMA against an annealed LR
@@ -20,7 +22,7 @@ from typing import Annotated
 
 import torch
 import tyro
-from config import AnnealConfig, Config, LRFitConfig, OptimConfig, PrepareConfig, SampleConfig, ScalingConfig, ShapeConfig
+from config import AnnealConfig, Config, EvalConfig, LRFitConfig, OptimConfig, PrepareConfig, PrepareEvalsConfig, SampleConfig, ScalingConfig, ShapeConfig
 from data import GPTData, load_meta, load_tokenizer
 from prepare import prepare_corpus
 from pretrain import LitGPT
@@ -77,6 +79,8 @@ Command = (
     Annotated[PrepareConfig, tyro.conf.subcommand("prepare")]
     | Annotated[Config, tyro.conf.subcommand("pretrain")]
     | Annotated[SampleConfig, tyro.conf.subcommand("sample")]
+    | Annotated[PrepareEvalsConfig, tyro.conf.subcommand("prepare-evals")]
+    | Annotated[EvalConfig, tyro.conf.subcommand("eval")]
     | Annotated[LRFitConfig, tyro.conf.subcommand("fit-lr")]
     | Annotated[ScalingConfig, tyro.conf.subcommand("fit-scaling")]
     | Annotated[AnnealConfig, tyro.conf.subcommand("check-anneal")]
@@ -93,6 +97,14 @@ def main(cmd: Command) -> None:
             pretrain(cmd)
         case SampleConfig():
             sample(cmd)
+        case PrepareEvalsConfig():
+            from evals import prepare_evals
+
+            prepare_evals(cmd)
+        case EvalConfig():
+            from evals import run_eval
+
+            run_eval(cmd)
         case LRFitConfig():
             from scaling import run_fit_lr  # numpy and matplotlib only: nothing to load for the other commands
 
