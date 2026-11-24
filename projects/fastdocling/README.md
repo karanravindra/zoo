@@ -8,7 +8,7 @@ longest matching prefix is kept (plus one free token), so the output is identica
 | --- | --- |
 | Target | `ibm-granite/granite-docling-258M` (Idefics3: SigLIP2 + a 30-layer, 576-wide Llama), frozen |
 | W&B project | `fastdocling`, group = the drafter's name |
-| Data | self-distilled DocTags in `DATA_ROOT/fastdocling/distill/` (page PNG bytes + the target's greedy token ids) |
+| Data | self-distilled DocTags in `DATA_ROOT/fastdocling/distill/current/` (page PNG bytes + the target's greedy token ids) |
 | Local run files | `<RUNS_ROOT>/fastdocling/<run id>/` |
 | Extra dependencies | none in the project env. `prepare` runs `generate.py` in its own uv env (`vllm`, Linux GPU), because current vLLM pins an older torch than the project |
 
@@ -24,6 +24,11 @@ uv run projects/fastdocling/cli.py train --drafter mtp        # train a drafter 
 
 `val/accept_len` is the mean number of draft tokens accepted per target pass, teacher-forced over every response position
 (so tokens per pass is that + 1). It is the quantity the checkpoint is chosen on, and the one to compare drafters by before timing them.
+
+`prepare` stages the parquet shards and a manifest of the target and generation settings, then switches `current`
+when the build is ready. Training and benchmarks use that build. Legacy flat shard directories remain readable.
+Old builds stay on disk so active readers can finish. Training truncates responses at `--max-len` and drops pages
+with fewer than two response tokens after truncation.
 
 ## Drafters
 

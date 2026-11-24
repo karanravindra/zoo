@@ -56,8 +56,19 @@ class LitDrafter(L.LightningModule):
                         embed=target.get_input_embeddings())
 
     def _step(self, batch, prefix: str, on_step: bool):
-        out = self.drafter(self.features(batch))
-        n = int(out.valid.any(-1).sum())
+        if batch is not None:
+            out = self.drafter(self.features(batch))
+            n = int(out.valid.any(-1).sum())
+            if n:
+                return self._log_drafts(out, prefix, on_step, n)
+        if not on_step:
+            return None
+        if self.trainer.world_size == 1:
+            return None
+        # A rank with no usable targets still participates in distributed gradient reduction.
+        return torch.stack([p.reshape(-1)[0] for p in self.drafter.parameters() if p.requires_grad]).sum() * 0
+
+    def _log_drafts(self, out, prefix: str, on_step: bool, n: int):
         chain = out.match.long().cumprod(dim=1)
         self.log(f"{prefix}/loss", out.loss, on_step=on_step, on_epoch=True, batch_size=n)
         # Expected extra tokens accepted per verification pass under greedy verification (the bonus token comes on top).
