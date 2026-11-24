@@ -96,7 +96,11 @@ and byte counts `prepare` recorded). `eval <run dir or checkpoint>...` then scor
   The `bpb` of the correct answer is smooth while the accuracy is still at chance, which is what a scaling-law fit needs. Loss sets are scored as in training, in windows of `block_size`
   tokens (a model never sees more context than it was trained with), and their `bpb` is the training `val/bpb` formula.
 - **Noise.** Every accuracy has its binomial standard error (`acc_se`): about 1.4% on a 1,000-item set, 0.5% on HellaSwag, 0.2% on BLiMP. A difference under two standard errors is not a result.
-- **Checked.** On a finished TinyStories run `loss_2m` equals the logged `val/loss` to 1e-4, and the two scoring paths (windows; padded prompt + answer batches) agree to 2e-6.
+- **Long answers.** An item whose longest answer fills the window cannot be scored by that model, so it is left out and counted in `skipped` (PIQA has recipes of 300 tokens: one of
+  the first 500 items against a 256-token window, none at 1,024). A prompt longer than the window loses its start.
+- **Checked.** On a finished TinyStories run `loss_2m` equals the logged `val/loss` to 1e-4, and the two scoring paths (windows; padded prompt + answer batches) agree to 2e-6. On a random
+  FineWeb-Edu model (4.6M parameters) every loss and slice is `ln(32768)` and every accuracy is at chance, the whole suite runs in under two minutes on a shared GPU, and
+  `docs.json` lines up with the shard stream document by document (tokens and bytes per document correlate 0.994; shifted by one document, 0.0). Each task's result is written to `eval.json` as it finishes.
 
 ## Scaling laws
 

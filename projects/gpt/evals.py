@@ -417,13 +417,18 @@ def load_mc(task: str, limit: int) -> list[tuple[str, list[str], int, str]]:
 
 
 def task_mc(sc: Scorer, task: str, cfg: EvalConfig) -> dict:
-    items = load_mc(task, cfg.limit)
-    ctxs, conts, nbytes = [], [], []
-    for prompt, answers, _, _ in items:
+    ctxs, conts, nbytes, items, skipped = [], [], [], [], 0
+    for item in load_mc(task, cfg.limit):
+        prompt, answers, _, _ = item
         c = [sc.eot] + sc.encode(prompt)
-        for a in answers:
+        ks = [sc.encode(" " + a) for a in answers]
+        if max(map(len, ks)) >= sc.bs:  # an answer as long as the window leaves no room for a context (PIQA has recipes of 300 tokens): no model of this window can score the item, so it is left out
+            skipped += 1
+            continue
+        items.append(item)
+        for a, k in zip(answers, ks):
             ctxs.append(c)
-            conts.append(sc.encode(" " + a))
+            conts.append(k)
             nbytes.append(len((" " + a).encode("utf-8")))
     lp, _ = sc.score(ctxs, conts, task)
     nbytes = np.array(nbytes, dtype=float)
@@ -440,7 +445,7 @@ def task_mc(sc: Scorer, task: str, cfg: EvalConfig) -> dict:
         start += k
     n = len(items)
     acc, acc_norm = float(np.mean(hits)), float(np.mean(hits_norm))
-    report = {"n": n, "chance": chance / n, "acc": acc, "acc_se": se(acc, n), "acc_norm": acc_norm, "acc_norm_se": se(acc_norm, n), "bpb": float(gold_nll / LN2 / gold_bytes)}
+    report = {"n": n, "skipped": skipped, "chance": chance / n, "acc": acc, "acc_se": se(acc, n), "acc_norm": acc_norm, "acc_norm_se": se(acc_norm, n), "bpb": float(gold_nll / LN2 / gold_bytes)}
     if len(by_group) > 1:  # mmlu: the 57 subjects
         report["acc_macro"] = float(np.mean([np.mean(v) for v in by_group.values()]))
         report["subjects"] = {g: {"n": len(v), "acc": float(np.mean(v))} for g, v in sorted(by_group.items())}
@@ -521,7 +526,7 @@ def summary_line(task: str, r: dict) -> str:
         if key in r:
             parts.append(f"{key} {r[key]:.4f}" + (f" ± {r[key + '_se']:.4f}" if key + "_se" in r else ""))
     if "chance" in r:
-        parts.append(f"(chance {r['chance']:.2f}, n {r['n']:,})")
+        parts.append(f"(chance {r['chance']:.2f}, n {r['n']:,}" + (f", {r['skipped']} too long for the window" if r.get("skipped") else "") + ")")
     elif "tokens" in r:
         parts.append(f"({r['tokens']:,} tokens)")
     return f"  {task:<14}" + "  ".join(parts)
@@ -542,18 +547,17 @@ def run_eval(cfg: EvalConfig) -> None:
         run_dir = path.parent.parent
         print(f"{run_dir.name}: {mc.n_layers} layers x {mc.dim}, {mc.n_params / 1e6:.2f}M parameters ({mc.n_params_body / 1e6:.2f}M outside the embedding), {module.tokens_seen:,} tokens, {mc.dataset}; tasks {', '.join(tasks)}")
         sc = Scorer(module, cfg.batch_tokens)
-        results = {}
-        for task in tasks:
-            results[task] = run_task(sc, task, cfg)
-            print(summary_line(task, results[task]), flush=True)
-        # eval.json keeps the tasks of earlier calls, so the suite can be filled in a task at a time
-        out = run_dir / "eval.json"
-        old = json.loads(out.read_text()) if out.exists() else {}
+        out = run_dir / "eval.json"  # keeps the tasks of earlier calls, so the suite can be filled in a task at a time
         info = {
             "ckpt": str(path), "dataset": mc.dataset, "n_params": mc.n_params, "n_params_body": mc.n_params_body,
             "tokens_seen": module.tokens_seen, "flops": module.tokens_seen * mc.train_flops_per_token,
         }  # fmt: skip
-        out.write_text(json.dumps({**info, "tasks": {**old.get("tasks", {}), **results}}, indent=1))
+        results = {}
+        for task in tasks:
+            results[task] = run_task(sc, task, cfg)
+            print(summary_line(task, results[task]), flush=True)
+            old = json.loads(out.read_text()) if out.exists() else {}  # written after every task: a crash later in the suite loses nothing
+            out.write_text(json.dumps({**info, "tasks": {**old.get("tasks", {}), task: results[task]}}, indent=1))
         print(f"  wrote {out}")
         if cfg.wandb:
             log_wandb(run_dir, flatten("eval", results, {}))
