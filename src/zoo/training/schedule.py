@@ -29,7 +29,8 @@ def make_scheduler(optimizer: torch.optim.Optimizer, cfg: RunConfig, total_steps
             return (step + 1) / warmup
         if cfg.lr_schedule == "constant":
             return 1.0
-        t = min(1.0, (step - warmup) / max(1, total_steps - warmup))
+        last = total_steps - 1  # the first optimizer update uses scale(0)
+        t = 1.0 if last > 0 and step >= last else (step - warmup) / max(1, last - warmup)
         decay = 0.5 * (1 + math.cos(math.pi * t)) if cfg.lr_schedule == "cosine" else 1 - t
         return floor + (1 - floor) * decay
 
