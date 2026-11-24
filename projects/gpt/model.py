@@ -63,20 +63,19 @@ class Attention(nn.Module):
         b, t, _ = x.shape
         q, k, v = (w(x).view(b, t, self.n_heads, self.head_dim).transpose(1, 2) for w in (self.wq, self.wk, self.wv))
         q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
+        primed = cache is not None and "k" in cache
+        if cache is not None:
+            if primed:
+                assert t == 1, "with a primed cache, feed one token at a time"
+                k, v = torch.cat([cache["k"], k], dim=2), torch.cat([cache["v"], v], dim=2)
+            cache["k"], cache["v"] = k, v
+
         if isinstance(mask, BlockMask):
             y = flex_attention(q, k, v, block_mask=mask)
         elif mask is not None:
             y = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
-        elif cache is None:
-            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-        elif "k" in cache:
-            assert t == 1, "with a primed cache, feed one token at a time"
-            k, v = torch.cat([cache["k"], k], dim=2), torch.cat([cache["v"], v], dim=2)
-            cache["k"], cache["v"] = k, v
-            y = F.scaled_dot_product_attention(q, k, v)  # the single new query may see every cached position
-        else:  # priming the cache with the whole prompt
-            cache["k"], cache["v"] = k, v
-            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=not primed)
         return self.wo(y.transpose(1, 2).reshape(b, t, -1))
 
 
@@ -155,10 +154,21 @@ class Llama(nn.Module):
 
         `cache` is a KV cache for generation, a list with one dict per block (start with empty dicts). The first call
         primes it with the whole context; later calls pass only the new token, whose position is the cache length.
-        The cached length plus T must stay <= block_size. The document mask applies to training and evaluation only."""
-        mask = self.doc_mask(idx) if self.cfg.doc_mask and cache is None else None
+        The cached length plus T must stay <= block_size. Document boundaries apply with or without a cache."""
         t = idx.shape[1]
         pos = cache[0].get("pos", 0) if cache else 0
+        mask = None
+        if self.cfg.doc_mask:
+            if not pos:
+                mask = self.doc_mask(idx)
+            if cache:
+                positions = torch.arange(pos, pos + t, device=idx.device)
+                start = torch.where(idx == self.cfg.eot_id, positions, -1).amax(dim=1)
+                if pos:
+                    start = torch.maximum(start, cache[0]["document_start"])
+                    keys = torch.arange(pos + t, device=idx.device)
+                    mask = keys[None, None, None, :] >= start[:, None, None, None]
+                cache[0]["document_start"] = start
         if cache:
             cache[0]["pos"] = pos + t
         cos, sin = self.rope_cos[pos : pos + t], self.rope_sin[pos : pos + t]

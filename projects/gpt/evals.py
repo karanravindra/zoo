@@ -21,6 +21,7 @@ binomial one) comes with every accuracy: a model's accuracy on n items is only k
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -32,10 +33,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from config import ALL_TASKS, TASKS_BY_CORPUS, EvalConfig, PrepareEvalsConfig
-from data import SPECIALS, corpus_dir, load_meta, load_tokenizer, val_window_ids
+from data import SPECIALS, checkpoint_corpus, corpus_dir, load_meta, load_tokenizer, val_window_ids
+from filelock import FileLock
 from pretrain import LitGPT
 from tqdm import tqdm
 
+from zoo.artifacts import write_json
 from zoo.data.text import Shards
 from zoo.training import load_module
 from zoo.utils.device import get_device
@@ -137,7 +140,8 @@ def prepare_evals(cfg: PrepareEvalsConfig) -> None:
     # The validation documents of a corpus whose val split was held out of the training stream: the first `val_docs`
     # documents of it, filtered as `prepare` filters them. Their order is the order of the end-of-text delimiters in
     # validation/shard_*.npy, and their number of documents and bytes must equal what `prepare` recorded.
-    source, meta = SOURCES[cfg.dataset], load_meta(cfg.dataset, "validation")
+    root = corpus_dir(cfg.dataset)
+    source, meta = SOURCES[cfg.dataset], load_meta(cfg.dataset, "validation", root=root)
     if source.val_split is not None:
         print(f"{cfg.dataset}: its validation split is a split of the source, which has no URLs to slice by")
         return
@@ -157,8 +161,8 @@ def prepare_evals(cfg: PrepareEvalsConfig) -> None:
             break
     if len(docs["bytes"]) != meta["num_docs"] or sum(docs["bytes"]) != meta["num_bytes"]:
         raise SystemExit(f"the first {source.val_docs} documents of {source.hub} are not the corpus's validation split: {len(docs['bytes'])} documents, {sum(docs['bytes']):,} bytes against {meta['num_docs']} and {meta['num_bytes']:,}")
-    path = corpus_dir(cfg.dataset) / "validation" / "docs.json"
-    path.write_text(json.dumps(docs))
+    path = root / "validation" / "docs.json"
+    write_json(path, docs)
     groups = defaultdict(int)
     for d in docs["domain"]:
         groups[domain_group(d)] += 1
@@ -174,7 +178,8 @@ class Scorer:
     def __init__(self, module, batch_tokens: int) -> None:
         self.net, self.cfg = module.net.eval(), module.cfg
         self.buckets = module.position_buckets()
-        self.tok = load_tokenizer(self.cfg.dataset)
+        self.root = checkpoint_corpus(self.cfg)
+        self.tok = load_tokenizer(self.cfg.dataset, root=self.root)
         self.device = next(module.net.parameters()).device
         self.bf16 = self.device.type == "cuda" and "bf16" in self.cfg.precision
         self.eot, self.bs, self.batch_tokens = self.cfg.eot_id, self.cfg.block_size, batch_tokens
@@ -221,36 +226,50 @@ class Scorer:
 
     @torch.inference_mode()
     def score(self, ctxs: list[list[int]], conts: list[list[int]], label: str) -> tuple[np.ndarray, np.ndarray]:
-        """`log p(continuation | context)` summed over the continuation's tokens, and whether greedy decoding from the
-        context reproduces the continuation exactly, for every pair. A pair longer than block_size loses its context's start."""
-        n = len(conts)
-        seqs = [(c + k)[-self.bs :] for c, k in zip(ctxs, conts)]
-        ncont = np.array([len(k) for k in conts])
-        assert (ncont < np.array([len(s) for s in seqs])).all(), "a continuation fills the whole window"
-        order = np.argsort([-len(s) for s in seqs], kind="stable")  # longest first: batches of similar length, so little padding
-        lp, ok = np.zeros(n), np.zeros(n, bool)
+        """Sum continuation log-probabilities, with up to block_size preceding tokens for each target."""
+        if len(ctxs) != len(conts):
+            raise ValueError("contexts and continuations must have the same length")
+        windows: list[tuple[int, list[int], int, int, int]] = []
+        for i, (context, continuation) in enumerate(zip(ctxs, conts)):
+            if not continuation:
+                continue
+            context = context or [self.eot]
+            seq = context + continuation
+            # Share one forward pass while the full prefix fits. Each later target needs its own shifted context.
+            start = len(context)
+            end = min(len(seq), self.bs + 1)
+            if start < end:
+                windows.append((i, seq, 0, end, end - start))
+            for target in range(max(start, end), len(seq)):
+                windows.append((i, seq, target - self.bs, target + 1, 1))
+
+        windows.sort(key=lambda window: window[3] - window[2], reverse=True)
+        lp = np.zeros(len(conts))
+        ok = np.ones(len(conts), dtype=bool)
         i = 0
-        with tqdm(total=n, desc=label, leave=False, disable=None) as bar:
-            while i < n:
-                t = len(seqs[order[i]])
-                idx = order[i : i + max(1, self.batch_tokens // t)]
-                ids = torch.zeros(len(idx), t, dtype=torch.long)
-                for r, j in enumerate(idx):
-                    ids[r, : len(seqs[j])] = torch.tensor(seqs[j])
-                ids = ids.to(self.device)
-                h = self.hidden(ids)
-                rows, cols = [], []
-                for r, j in enumerate(idx):
-                    length, c = len(seqs[j]), ncont[j]
-                    rows += [r] * c  # the continuation's tokens are at length - c .. length - 1, predicted from the position before
-                    cols += range(length - c - 1, length - 1)
-                rows, cols = torch.tensor(rows, device=self.device), torch.tensor(cols, device=self.device)
-                nll, hit = self.nll_hits(h[rows, cols], ids[rows, cols + 1])
-                seg = np.repeat(np.arange(len(idx)), ncont[idx])
-                lp[idx] = -np.bincount(seg, weights=nll.cpu().numpy(), minlength=len(idx))
-                ok[idx] = np.bincount(seg, weights=(~hit).cpu().numpy().astype(float), minlength=len(idx)) == 0
-                i += len(idx)
-                bar.update(len(idx))
+        with tqdm(total=len(windows), desc=label, leave=False, disable=None) as bar:
+            while i < len(windows):
+                _, _, lo, hi, _ = windows[i]
+                width = hi - lo - 1
+                batch = windows[i : i + max(1, self.batch_tokens // width)]
+                ids = torch.zeros(len(batch), width, dtype=torch.long)
+                rows, cols, owners, targets = [], [], [], []
+                for row, (owner, seq, lo, hi, count) in enumerate(batch):
+                    end = hi - lo - 1
+                    ids[row, :end] = torch.tensor(seq[lo : hi - 1])
+                    rows.extend([row] * count)
+                    cols.extend(range(end - count, end))
+                    owners.extend([owner] * count)
+                    targets.extend(seq[hi - count : hi])
+                h = self.hidden(ids.to(self.device))
+                rows = torch.tensor(rows, device=self.device)
+                cols = torch.tensor(cols, device=self.device)
+                y = torch.tensor(targets, device=self.device)
+                nll, hit = self.nll_hits(h[rows, cols], y)
+                np.add.at(lp, owners, -nll.cpu().numpy())
+                np.logical_and.at(ok, owners, hit.cpu().numpy())
+                i += len(batch)
+                bar.update(len(batch))
         return lp, ok
 
 
@@ -318,15 +337,15 @@ def slice_report(nll: np.ndarray, hit: np.ndarray, tokens: np.ndarray, eot: int,
 
 def task_val(sc: Scorer, cfg: EvalConfig) -> dict:
     dataset = sc.cfg.dataset
-    meta = load_meta(dataset, "validation")
-    tokens = np.asarray(Shards(corpus_dir(dataset) / "validation")[0 : meta["length"]])
+    meta = load_meta(dataset, "validation", root=sc.root)
+    tokens = np.asarray(Shards(sc.root / "validation", meta=meta)[0 : meta["length"]])
     if cfg.limit_tokens:
         tokens = tokens[: cfg.limit_tokens + 1]
     nll, hit = sc.stream(tokens, "val")
     report = stream_report(sc, nll, hit, meta["length"] / meta["num_bytes"])
     if not cfg.limit_tokens:  # the windows that training's val/loss averages: the check that this is the same measurement
         report["loss_2m"] = float(nll.reshape(-1, sc.bs)[val_window_ids(len(nll) // sc.bs, sc.bs, sc.cfg.val_tokens)].mean())
-    docs_path = corpus_dir(dataset) / "validation" / "docs.json"
+    docs_path = sc.root / "validation" / "docs.json"
     report["slices"] = slice_report(nll, hit, tokens, sc.eot, json.loads(docs_path.read_text()) if docs_path.exists() else None)
     return report
 
@@ -502,7 +521,7 @@ def run_task(sc: Scorer, task: str, cfg: EvalConfig) -> dict:
 
 
 def flatten(prefix: str, value, out: dict[str, float]) -> dict[str, float]:
-    """eval/<task>/<metric>/... for the numbers of a nested result (the 67 blimp paradigms and 57 mmlu subjects stay in eval.json)."""
+    """eval/<key>/<task>/<metric>/... for the numbers of a nested result (the 67 blimp paradigms and 57 mmlu subjects stay in eval.json)."""
     if isinstance(value, dict):
         for k, v in value.items():
             if k not in ("paradigms", "subjects"):
@@ -531,32 +550,68 @@ def resolve_ckpt(path: Path) -> Path:
     return path / "checkpoints" / "last.ckpt" if path.is_dir() else path
 
 
+def eval_identity(path: Path, cfg: EvalConfig) -> tuple[str, dict]:
+    with path.open("rb") as f:
+        checkpoint = hashlib.file_digest(f, "sha256").hexdigest()
+    settings = {
+        "limit": cfg.limit,
+        "limit_tokens": cfg.limit_tokens,
+        "pg19_chars": cfg.pg19_chars,
+        "batch_tokens": cfg.batch_tokens,
+    }
+    key = hashlib.sha256(json.dumps([checkpoint, settings], sort_keys=True).encode()).hexdigest()
+    return key, {"checkpoint_sha256": checkpoint, "settings": settings}
+
+
+def save_task(run_dir: Path, key: str, info: dict, task: str, result: dict, *, latest: bool) -> None:
+    directory = run_dir / "eval"
+    directory.mkdir(exist_ok=True)
+    out = directory / f"{key}.json"
+    with FileLock(str(directory / ".lock")):
+        report = json.loads(out.read_text()) if out.exists() else {**info, "tasks": {}}
+        report["tasks"][task] = result
+        write_json(out, report)
+        if latest:
+            write_json(run_dir / "eval.json", report)
+
+
 def run_eval(cfg: EvalConfig) -> None:
     if not cfg.ckpts:
         raise SystemExit("give at least one run directory or checkpoint: `eval runs/gpt/<run id>`")
     device = get_device()
+    latest = not cfg.limit and not cfg.limit_tokens and cfg.pg19_chars == EvalConfig.pg19_chars
     for path in map(resolve_ckpt, cfg.ckpts):
+        path = path.resolve(strict=True)
+        before = path.stat()
+        key, provenance = eval_identity(path, cfg)
         module = load_module(LitGPT, path, map_location=device).to(device)
+        after = path.stat()
+        if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+            after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+        ):
+            raise RuntimeError(f"{path} changed while loading; evaluate a stable checkpoint")
         mc = module.cfg
         tasks = cfg.tasks or TASKS_BY_CORPUS.get(mc.dataset, ALL_TASKS)
-        run_dir = path.parent.parent
+        run_dir = path.parent.parent if path.parent.name == "checkpoints" else path.parent
         print(f"{run_dir.name}: {mc.n_layers} layers x {mc.dim}, {mc.n_params / 1e6:.2f}M parameters ({mc.n_params_body / 1e6:.2f}M outside the embedding), {module.tokens_seen:,} tokens, {mc.dataset}; tasks {', '.join(tasks)}")
         sc = Scorer(module, cfg.batch_tokens)
-        results = {}
-        for task in tasks:
-            results[task] = run_task(sc, task, cfg)
-            print(summary_line(task, results[task]), flush=True)
-        # eval.json keeps the tasks of earlier calls, so the suite can be filled in a task at a time
-        out = run_dir / "eval.json"
-        old = json.loads(out.read_text()) if out.exists() else {}
         info = {
-            "ckpt": str(path), "dataset": mc.dataset, "n_params": mc.n_params, "n_params_body": mc.n_params_body,
-            "tokens_seen": module.tokens_seen, "flops": module.tokens_seen * mc.train_flops_per_token,
-        }  # fmt: skip
-        out.write_text(json.dumps({**info, "tasks": {**old.get("tasks", {}), **results}}, indent=1))
-        print(f"  wrote {out}")
-        if cfg.wandb:
-            log_wandb(run_dir, flatten("eval", results, {}))
+            **provenance, "ckpt": str(path), "dataset": mc.dataset, "n_params": mc.n_params,
+            "n_params_body": mc.n_params_body, "tokens_seen": module.tokens_seen,
+            "flops": module.tokens_seen * mc.train_flops_per_token,
+        }
+        results = {}
+        try:
+            for task in tasks:
+                result = run_task(sc, task, cfg)
+                save_task(run_dir, key, info, task, result, latest=latest)
+                results[task] = result
+                print(summary_line(task, result), flush=True)
+        finally:
+            if results:
+                print(f"  wrote {run_dir / 'eval' / (key + '.json')}")
+                if cfg.wandb:
+                    log_wandb(run_dir, flatten(f"eval/{key}", results, {}))
         del module, sc
         torch.cuda.empty_cache()
 
@@ -578,4 +633,4 @@ def log_wandb(run_dir: Path, values: dict[str, float]) -> None:
         run.finish()
         print(f"  logged {len(values)} values to W&B run {run_id}")
     except Exception as e:
-        print(f"  W&B logging failed ({type(e).__name__}: {e}); the numbers are in eval.json")
+        print(f"  W&B logging failed ({type(e).__name__}: {e}); the numbers are saved locally")
