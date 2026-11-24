@@ -1,6 +1,6 @@
 """Token corpora cached on disk as shards, mirroring what `ImageDataset` does for images (tokenizer-agnostic).
 
-`write_token_corpus` streams token-id sequences into `<cache_dir>/<split>/shard_0000.npy, shard_0001.npy, ...` (uint16
+`write_token_corpus` streams token-id sequences into `a build directory under <cache_dir>/<split>` (uint16
 if the vocab fits, else uint32) plus `meta.json`, holding at most about `shard_tokens` tokens in RAM. A shard closes
 at a sequence boundary once it has `shard_tokens` tokens, so keep sequences small (a document, or a few thousand of
 them) for even shards. `Shards` is the read side: the shards as one logical, memory-mapped token array. Caches
@@ -17,10 +17,13 @@ from bisect import bisect_right
 from collections.abc import Callable, Iterable, Sequence
 from itertools import accumulate
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import numpy as np
 import torch
 from tqdm import tqdm
+
+from zoo.artifacts import staged_build, write_json
 
 SHARD_TOKENS = 1 << 28  # about 268M tokens: 512 MB as uint16
 
@@ -33,56 +36,53 @@ def write_token_corpus(
     extra_meta: dict | Callable[[], dict] | None = None,
     shard_tokens: int = SHARD_TOKENS,
 ) -> Path:
-    """Write `sequences` (iterable of token-id arrays/lists) to `<cache_dir>/<split>/shard_NNNN.npy` and `meta.json`.
+    """Write `sequences` (iterable of token-id arrays/lists) to a build under `<cache_dir>/<split>` and publish its `meta.json`.
 
     `extra_meta` is merged into meta.json (e.g. the UTF-8 byte count of the raw text). Pass a callable to compute
     it after the stream is consumed, since the iterable is only read inside this function. meta.json also lists
-    the shards (`shards`: file and length of each), the total `length` and `num_items`. Whatever the split held
-    before (shards or a legacy tokens.npy) is removed first."""
+    the shards (`shards`: file and length of each), the total `length` and `num_items`. The manifest switches to the new shards only
+    after all data has been written. Existing readers retain their snapshot."""
     out = Path(cache_dir) / split
-    out.mkdir(parents=True, exist_ok=True)
-    for old in [*out.glob("shard_*.npy"), out / "tokens.npy", *out.glob("delim_*.npy")]:
-        old.unlink(missing_ok=True)
-    dtype = np.dtype(np.uint16 if vocab_size <= 2**16 else np.uint32)
-    shards: list[dict] = []
-    buf: list[np.ndarray] = []
-    buffered, n_items = 0, 0
+    with staged_build(out) as stage:
+        shard_dir = stage.relative_to(out.resolve())
+        dtype = np.dtype(np.uint16 if vocab_size <= 2**16 else np.uint32)
+        shards: list[dict] = []
+        buf: list[np.ndarray] = []
+        buffered, n_items = 0, 0
 
-    def flush() -> None:
-        nonlocal buffered
-        if not buf:
-            return
-        name = f"shard_{len(shards):04d}.npy"
-        tmp = out / (name + ".tmp")
-        with open(tmp, "wb") as f:
-            np.save(f, np.concatenate(buf).astype(dtype))
-        os.replace(tmp, out / name)
-        shards.append({"file": name, "length": buffered})
-        buf.clear()
-        buffered = 0
+        def flush() -> None:
+            nonlocal buffered
+            if not buf:
+                return
+            name = f"shard_{len(shards):04d}.npy"
+            np.save(stage / name, np.concatenate(buf).astype(dtype))
+            shards.append({"file": str(shard_dir / name), "length": buffered})
+            buf.clear()
+            buffered = 0
 
-    with tqdm(desc=f"{split}: write", unit="tok", unit_scale=True) as bar:
-        for seq in sequences:
-            a = np.asarray(seq, dtype=np.int64)
-            if len(a) and (a.min() < 0 or a.max() >= vocab_size):
-                raise ValueError(f"token id outside [0, {vocab_size})")
-            buf.append(a)
-            buffered += len(a)
-            n_items += 1
-            bar.update(len(a))
-            if buffered >= shard_tokens:
-                flush()
-        flush()
-    extra = extra_meta() if callable(extra_meta) else (extra_meta or {})
-    meta = {
-        "length": sum(s["length"] for s in shards),
-        "num_items": n_items,
-        "vocab_size": vocab_size,
-        "dtype": dtype.name,
-        "shards": shards,
-        **extra,
-    }
-    (out / "meta.json").write_text(json.dumps(meta, indent=2))
+        with tqdm(desc=f"{split}: write", unit="tok", unit_scale=True) as bar:
+            for seq in sequences:
+                a = np.asarray(seq, dtype=np.int64)
+                if len(a) and (a.min() < 0 or a.max() >= vocab_size):
+                    raise ValueError(f"token id outside [0, {vocab_size})")
+                buf.append(a)
+                buffered += len(a)
+                n_items += 1
+                bar.update(len(a))
+                if buffered >= shard_tokens:
+                    flush()
+            flush()
+        extra = extra_meta() if callable(extra_meta) else (extra_meta or {})
+        meta = {
+            "length": sum(s["length"] for s in shards),
+            "num_items": n_items,
+            "vocab_size": vocab_size,
+            "dtype": dtype.name,
+            "shards": shards,
+            **extra,
+            "shard_dir": str(shard_dir),
+        }
+        write_json(out / "meta.json", meta)
     return out
 
 
@@ -92,19 +92,20 @@ class Shards:
     A slice that crosses a shard boundary is stitched together, so shards behave as if concatenated. Each shard is
     memory-mapped, so nothing is read until it is indexed. Opens a legacy single `tokens.npy` as one shard."""
 
-    def __init__(self, split_dir: str | Path) -> None:
+    def __init__(self, split_dir: str | Path, *, meta: dict | None = None) -> None:
         self.dir = Path(split_dir)
-        meta = json.loads((self.dir / "meta.json").read_text())
+        self.meta = meta if meta is not None else json.loads((self.dir / "meta.json").read_text())
+        meta = self.meta
         files = [s["file"] for s in meta["shards"]] if "shards" in meta else ["tokens.npy"]
         self.arrays = [np.load(self.dir / f, mmap_mode="r") for f in files]
         self.starts = [0, *accumulate(len(a) for a in self.arrays)]  # global start of each shard, then the total
         self.dtype = self.arrays[0].dtype if self.arrays else np.dtype(np.uint16)
 
     def __getstate__(self) -> dict:  # DataLoader workers re-open the memmaps instead of pickling their contents
-        return {"dir": self.dir}
+        return {"dir": self.dir, "meta": self.meta}
 
     def __setstate__(self, state: dict) -> None:
-        self.__init__(state["dir"])
+        self.__init__(state["dir"], meta=state.get("meta"))
 
     def __len__(self) -> int:
         return self.starts[-1]
@@ -140,9 +141,9 @@ class TokenDataset:
 
     def __init__(self, cache_dir: str | Path, split: str, block_size: int, device="cpu", seed: int = 0) -> None:
         d = Path(cache_dir) / split
-        self.dir, self._delims = d, {}
-        self.meta = json.loads((d / "meta.json").read_text())
         self.tokens = Shards(d)
+        self.meta = self.tokens.meta
+        self.dir, self._delims = d / self.meta.get("shard_dir", ""), {}
         if len(self.tokens) <= block_size:
             raise ValueError(f"{split}: {len(self.tokens)} tokens is too few for block_size {block_size}")
         self.block_size, self.device, self.seed = block_size, device, seed
@@ -166,9 +167,14 @@ class TokenDataset:
             if not path.exists():
                 chunk = 1 << 24
                 found = [np.flatnonzero(self.tokens[i : i + chunk] == delim_id) + i for i in range(0, len(self.tokens), chunk)]
-                tmp = path.with_suffix(".tmp.npy")
-                np.save(tmp, np.concatenate(found).astype(np.int64))
-                os.replace(tmp, path)
+                with NamedTemporaryFile(dir=path.parent, delete=False) as f:
+                    tmp = Path(f.name)
+                    try:
+                        np.save(f, np.concatenate(found).astype(np.int64))
+                        f.close()
+                        os.replace(tmp, path)
+                    finally:
+                        tmp.unlink(missing_ok=True)
             self._delims[delim_id] = np.load(path)
         return self._delims[delim_id]
 

@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 from config import Config
 from cut_cross_entropy import linear_cross_entropy
-from data import load_tokenizer
+from data import checkpoint_corpus, load_tokenizer
 from lightning.pytorch.loggers import WandbLogger
 from model import Llama
 
@@ -97,7 +97,8 @@ class LitGPT(L.LightningModule):
         loggers = [lg for lg in self.trainer.loggers if isinstance(lg, WandbLogger)]
         if not loggers:
             return
-        tok, text = load_tokenizer(cfg.dataset), cfg.sample_prompt
+        tok = load_tokenizer(cfg.dataset, root=checkpoint_corpus(cfg))
+        text = cfg.sample_prompt
         prompt = torch.tensor([[int(t) for t in tok.encode(text)]], device=self.device)
         g = torch.Generator(device=self.device).manual_seed(1234)  # the same seed at every validation, so samples are comparable
         with torch.autocast(self.device.type, torch.bfloat16, enabled="bf16" in cfg.precision):

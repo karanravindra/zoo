@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, get_args
 
-from tyro.conf import Positional
+from tyro.conf import Positional, Suppress
 
 from zoo.training import RunConfig
 
@@ -22,6 +22,7 @@ class Config(RunConfig):
     """Pretraining. The model fields rebuild the network from a checkpoint, so later stages reuse this class."""
 
     dataset: str = "tinystories"  # a corpus written by `prepare` (see SOURCES in prepare.py)
+    corpus_build: Suppress[str | None] = None  # versioned corpus path relative to the dataset root, recorded by pretrain
     # model (about 5.9M parameters with the defaults)
     vocab_size: int = 4096  # set from the corpus by cli.py
     eot_id: int = 256  # end-of-text id, set from the corpus by cli.py
@@ -150,7 +151,7 @@ class PrepareEvalsConfig:
 
 @dataclass
 class EvalConfig:
-    """Score checkpoints on the evaluation suite (`evals.py`): loss sets in bits per byte, and zero-shot multiple choice by log-likelihood. Writes eval.json to the run directory."""
+    """Score checkpoints on the evaluation suite (`evals.py`): loss sets in bits per byte, and zero-shot multiple choice by log-likelihood. Saves each task by checkpoint and evaluation settings."""
 
     ckpts: Positional[tuple[Path, ...]]  # checkpoints, or run directories (their checkpoints/last.ckpt)
     tasks: tuple[Task, ...] = ()  # () = every task, or val and blimp for a TinyStories model; val = the corpus's own validation split, sliced
@@ -158,7 +159,7 @@ class EvalConfig:
     limit_tokens: int = 0  # > 0: the loss sets (val, wikitext, pg19) score only this many tokens
     pg19_chars: int = 40_000  # characters of each of the 100 test books (from the middle) in the pg19 set: about 1M tokens
     batch_tokens: int = 32_768  # tokens per forward pass (lower it if the GPU runs out of memory)
-    wandb: bool = True  # also write the numbers to the run's W&B summary, as eval/<task>/<metric> (WANDB_MODE=offline when unreachable)
+    wandb: bool = True  # also write the numbers to the run's W&B summary, as eval/<key>/<task>/<metric> (WANDB_MODE=offline when unreachable)
 
 
 @dataclass
