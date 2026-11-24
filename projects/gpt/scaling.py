@@ -272,53 +272,69 @@ def run_fit_lr(args: LRFitConfig) -> None:
     runs = load_runs(args.group)
     if not runs:
         raise SystemExit(f"no finished runs in group {args.group!r}")
-    diverged = [r for r in runs if not math.isfinite(r.loss[-1])]
-    groups: dict[int, list[tuple[float, float]]] = {}
-    layers: dict[int, int] = {}
-    for r in runs:
-        if math.isfinite(r.loss[-1]):
-            groups.setdefault(r.cfg.dim, []).append((r.cfg.peak_lr, float(r.loss[-1])))
-            layers[r.cfg.dim] = r.cfg.n_layers
-    steps = runs[0].steps[-1]
-    print(f"== lr: {len(runs)} runs of {args.group}, loss after {steps:,} steps ({runs[0].tokens[-1] / 1e6:.0f}M tokens)"
-          + (f"; diverged: {', '.join(f'{r.label} lr {r.cfg.peak_lr:.1e}' for r in diverged)}" if diverged else "") + " ==")
-    best, out = {}, {}
-    for dim in sorted(groups):
-        pts = sorted(groups[dim])
-        lr, loss, edge = lr_optimum(pts)
-        best[dim] = (lr, loss, edge)
-        print(f"  width {dim:>4} ({layers[dim]} layers): best lr {lr:.2e}  loss {loss:.4f}  {'AT THE EDGE of the grid (a bound only)' if edge else 'between the runs'}"
-              f"   [{', '.join(f'{p[0]:.1e}: {p[1]:.3f}' for p in pts)}]")
-    out["best_lr"] = {str(d): dict(lr=v[0], loss=v[1], edge=v[2]) for d, v in best.items()}
-    law = lr_law(groups, args.near)
-    if law is None:
-        print("  no rule: it needs two widths with three runs each near their best")
-    else:
-        print(f"\n  rule (all runs pooled): LR* = {law['lr0']:.2e} * (width / {LR_REF_DIM}) ^ {law['a']:+.2f}"
-              f"   (jackknife over {len(law['widths'])} widths: LR0 x or / {law['lr0_factor_se']:.2f}, exponent +- {law['a_se']:.2f}; curvature {law['kappa']:.3f} loss per octave^2)")
-        lr0, p = law["lr0"], -law["a"]
-        print(f"  flags for the ladder: --lr {lr0:.2e} --lr-width-exp {p:.2f}     bracket (x0.7, x1.4): lr {0.7 * lr0:.2e} / {lr0:.2e} / {1.4 * lr0:.2e}")
-        out["rule"] = dict(law, lr=lr0, lr_width_exp=p)
+    # `steps`: a constant LR with an EMA makes the first k steps of a run the same as a run planned for k steps, so one set of long
+    # runs gives the best LR at every shorter length too. Default: the last step of each run.
+    reads = list(args.steps) or [0]
     d = out_dir(args.out, args.group)
-    fig, ax = plt.subplots(1, 2, figsize=(11, 4.2))
-    for i, dim in enumerate(sorted(groups)):
-        pts = sorted(groups[dim])
-        floor = min(p[1] for p in pts)  # each width relative to its own best run, so the curves overlay
-        ax[0].plot([p[0] for p in pts], [p[1] - floor for p in pts], "o-", color=f"C{i}", label=f"width {dim} (best {floor:.3f})")
-        ax[0].plot([best[dim][0]], [best[dim][1] - floor], marker="*", ms=14, mfc="none", mec=f"C{i}", ls="none")
-    ax[0].set(xscale="log", xlabel="peak learning rate", ylabel=f"val loss after {steps:,} steps, above the width's best run", ylim=(-0.02, args.near * 2))
-    ax[0].legend()
-    ax[0].grid(alpha=0.3)
-    dims = np.array(sorted(best))
-    ax[1].plot(dims, [best[x][0] for x in dims], "o", label="parabola minimum per width")
-    if law:
-        xs = np.geomspace(dims.min() / 1.3, dims.max() * 1.3, 20)
-        ax[1].plot(xs, law["lr0"] * (xs / LR_REF_DIM) ** law["a"], "k--", label=f"rule, exponent {law['a']:+.2f}")
-    ax[1].set(xscale="log", yscale="log", xlabel="width", ylabel="best learning rate")
-    ax[1].legend()
-    ax[1].grid(alpha=0.3, which="both")
-    save_fig(fig, d / "lr.png")
-    save_results(d, out)
+    out: dict = {}
+    for step in reads:
+        loss_of = (lambda r, s=step: r.at_steps(s)) if step else (lambda r: float(r.loss[-1]))
+        usable = [r for r in runs if math.isfinite(loss_of(r))]
+        diverged = [r for r in runs if step == 0 and not math.isfinite(loss_of(r))]
+        if not usable:
+            print(f"== lr: no run has a validation at step {step:,} ==")
+            continue
+        groups: dict[int, list[tuple[float, float]]] = {}
+        layers: dict[int, int] = {}
+        for r in usable:
+            groups.setdefault(r.cfg.dim, []).append((r.cfg.peak_lr, loss_of(r)))
+            layers[r.cfg.dim] = r.cfg.n_layers
+        at = step or int(usable[0].steps[-1])
+        tokens = float(usable[0].tokens[usable[0].steps == at][0]) if step else float(usable[0].tokens[-1])
+        print(f"== lr: {len(usable)} runs of {args.group}, loss after {at:,} steps ({tokens / 1e6:.0f}M tokens)"
+              + (f"; diverged: {', '.join(f'{r.label} lr {r.cfg.peak_lr:.1e}' for r in diverged)}" if diverged else "") + " ==")
+        best, res = {}, {}
+        for dim in sorted(groups):
+            pts = sorted(groups[dim])
+            lr, loss, edge = lr_optimum(pts)
+            best[dim] = (lr, loss, edge)
+            print(f"  width {dim:>4} ({layers[dim]} layers): best lr {lr:.2e}  loss {loss:.4f}  {'AT THE EDGE of the grid (a bound only)' if edge else 'between the runs'}"
+                  f"   [{', '.join(f'{p[0]:.1e}: {p[1]:.3f}' for p in pts)}]")
+        res["best_lr"] = {str(w): dict(lr=v[0], loss=v[1], edge=v[2]) for w, v in best.items()}
+        law = lr_law(groups, args.near)
+        if law is None:
+            print("  no rule: it needs two widths with three runs each near their best")
+        else:
+            print(f"\n  rule (all runs pooled): LR* = {law['lr0']:.2e} * (width / {LR_REF_DIM}) ^ {law['a']:+.2f}"
+                  f"   (jackknife over {len(law['widths'])} widths: LR0 x or / {law['lr0_factor_se']:.2f}, exponent +- {law['a_se']:.2f}; curvature {law['kappa']:.3f} loss per octave^2)")
+            lr0, p = law["lr0"], -law["a"]
+            print(f"  flags for the ladder: --lr {lr0:.2e} --lr-width-exp {p:.2f}     bracket (x0.7, x1.4): lr {0.7 * lr0:.2e} / {lr0:.2e} / {1.4 * lr0:.2e}")
+            res["rule"] = dict(law, lr=lr0, lr_width_exp=p)
+        out[str(at)] = res
+        if step == reads[-1]:  # the figure is for the last length asked for
+            fig, ax = plt.subplots(1, 2, figsize=(11, 4.2))
+            for i, dim in enumerate(sorted(groups)):
+                pts = sorted(groups[dim])
+                floor = min(p[1] for p in pts)  # each width relative to its own best run, so the curves overlay
+                ax[0].plot([p[0] for p in pts], [p[1] - floor for p in pts], "o-", color=f"C{i}", label=f"width {dim} (best {floor:.3f})")
+                ax[0].plot([best[dim][0]], [best[dim][1] - floor], marker="*", ms=14, mfc="none", mec=f"C{i}", ls="none")
+            ax[0].set(xscale="log", xlabel="peak learning rate", ylabel=f"val loss after {at:,} steps, above the width's best run", ylim=(-0.02, args.near * 2))
+            ax[0].legend()
+            ax[0].grid(alpha=0.3)
+            dims = np.array(sorted(best))
+            ax[1].plot(dims, [best[x][0] for x in dims], "o", label="parabola minimum per width")
+            if law:
+                xs = np.geomspace(dims.min() / 1.3, dims.max() * 1.3, 20)
+                ax[1].plot(xs, law["lr0"] * (xs / LR_REF_DIM) ** law["a"], "k--", label=f"rule, exponent {law['a']:+.2f}")
+            ax[1].set(xscale="log", yscale="log", xlabel="width", ylabel="best learning rate")
+            ax[1].legend()
+            ax[1].grid(alpha=0.3, which="both")
+            save_fig(fig, d / "lr.png")
+        if step != reads[-1]:
+            print()
+    # results.json keeps its old shape for a single read (the last step), and gains one entry per step when several were asked for
+    last = out[max(out, key=int)] if out else {}
+    save_results(d, {**last, "by_step": out} if len(out) > 1 else last)
 
 
 # ---------------------------------------------------------------- fit-scaling

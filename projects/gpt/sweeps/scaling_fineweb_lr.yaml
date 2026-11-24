@@ -1,0 +1,47 @@
+# FineWeb-Edu, step 1: the best peak learning rate against width. The TinyStories rule (2e-3 x 256 / width) came from 5,000-step runs and
+# turned out to be too high for longer ones (the best constant LR falls with run length), so these runs go to 10,000 steps (164M tokens)
+# and `fit-lr --steps` reads them at 2,500, 5,000 and 10,000 steps: with a constant LR and an EMA the first k steps of a run are the same as a
+# k-step run. Three ladder sizes (aspect 64: 256, 384 and 512 wide) at five learning rates, at context 1024 (`--micro-tokens` keeps the
+# micro-batch at the step's 16,384 tokens, so no gradient accumulation). `lr` is the peak at width 256 (`lr_width_exp 1` scales it as
+# 1 / width): 3.5e-4 to 2.8e-3 at width 512. Needs the corpus: `uv run projects/gpt/cli.py prepare --dataset fineweb-edu`.
+# About 3 hours on the 5070 Ti (a 10,000-step run is 5 to 20 minutes). Create it once, then start an agent:
+#   uv run wandb sweep --project gpt projects/gpt/sweeps/scaling_fineweb_lr.yaml
+#   uv run wandb agent <entity>/gpt/<sweep id>
+# Then `uv run projects/gpt/cli.py fit-lr --group fineweb-lr --steps 2500 5000 10000`.
+program: projects/gpt/cli.py
+method: grid
+name: scaling-fineweb-lr
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  n_layers:
+    values: [4, 6, 8]
+  lr:
+    values: [7.0e-4, 1.0e-3, 1.4e-3, 2.0e-3, 2.8e-3]
+  aspect:
+    value: 64
+  lr_width_exp:
+    value: 1.0
+  dataset:
+    value: fineweb-edu
+  block_size:
+    value: 1024
+  micro_tokens:
+    value: 16384
+  max_steps:
+    value: 10000
+  val_every:
+    value: 500
+  ema:
+    value: 0.99999
+  sample_tokens:
+    value: 0
+  group:
+    value: fineweb-lr
+command:
+  - uv
+  - run
+  - ${program}
+  - pretrain
+  - ${args}
