@@ -1,18 +1,18 @@
 # DigitNet
 
 A small CNN (two conv blocks, global pooling, linear head) that classifies 28x28 digits. Trains on MNIST
-by default; any dataset class in `zoo.data` with `image_shape` and `num_classes` works via `Config.dataset`.
+by default; `--dataset QMNIST` trains on QMNIST instead (same 60k train images, a 60k-image test set).
 The reference project for the Lightning + W&B layout described in `CLAUDE.md`.
 
 | | |
 | --- | --- |
 | W&B project | `digitnet` |
-| Data | MNIST via `zoo.data` (cached under `DATA_ROOT`) |
+| Data | MNIST or QMNIST (`--dataset`) via `zoo.data` (cached under `DATA_ROOT`) |
 | Local run files | `<RUNS_ROOT>/digitnet/<run id>/` |
 | Extra dependencies | none |
 
 ```
-uv run projects/digitnet/cli.py prepare                                  # download and cache MNIST
+uv run projects/digitnet/cli.py prepare                                  # download and cache MNIST (`--dataset QMNIST` for QMNIST)
 uv run projects/digitnet/cli.py train
 uv run projects/digitnet/cli.py train --epochs 20 --lr 1e-3 --name lr1e-3   # every Config field is a flag; see --help
 uv run projects/digitnet/cli.py train --lr-schedule constant --ema 0.999     # no lr decay, EMA weights for val/test

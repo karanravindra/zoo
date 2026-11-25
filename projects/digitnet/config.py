@@ -7,10 +7,12 @@ from typing import Literal
 
 from zoo.training import RunConfig
 
+Dataset = Literal["MNIST", "QMNIST"]
+
 
 @dataclass
 class Config(RunConfig):
-    dataset: str = "MNIST"  # class name in zoo.data
+    dataset: Dataset = "MNIST"  # MNIST (10k test) or QMNIST (60k test)
     val_size: int = 5000  # held out from the train split for checkpoint selection
     width: int = 32  # channels of the first conv block (the second has twice as many)
     kernel_size: int = 5  # of both convs in each block
@@ -26,4 +28,4 @@ class Config(RunConfig):
 class PrepareConfig:
     """Download and cache the dataset, so `train` starts straight away."""
 
-    dataset: str = "MNIST"  # class name in zoo.data
+    dataset: Dataset = "MNIST"  # MNIST (10k test) or QMNIST (60k test)
