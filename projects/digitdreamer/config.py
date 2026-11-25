@@ -11,6 +11,8 @@ from tyro.conf import Positional
 from zoo.paths import runs_root
 from zoo.training import RunConfig
 
+Dataset = Literal["MNIST", "QMNIST"]
+
 LRSchedule = Literal["constant", "cosine", "linear", "onecycle"]
 
 
@@ -18,7 +20,7 @@ LRSchedule = Literal["constant", "cosine", "linear", "onecycle"]
 class AEConfig(RunConfig):
     """Stage 1: train the autoencoder. Keeps the best checkpoint by val/mse (pass it to `flow` as --ae-ckpt)."""
 
-    dataset: str = "MNIST"  # class name in zoo.data
+    dataset: Dataset = "MNIST"  # MNIST (10k test) or QMNIST (60k test)
     val_size: int = 5000  # held out from the train split for checkpoint selection
     width: int = 8
     kernel_size: int = 5  # of every spatial conv
@@ -71,4 +73,4 @@ class SampleConfig:
 class PrepareConfig:
     """Download and cache the dataset, so the training commands start straight away."""
 
-    dataset: str = "MNIST"  # class name in zoo.data
+    dataset: Dataset = "MNIST"  # MNIST (10k test) or QMNIST (60k test)

@@ -7,12 +7,12 @@ noise into those latents, conditioned on the digit (with classifier-free guidanc
 | | |
 | --- | --- |
 | W&B project | `digitdreamer`, group `ae` or `flow` |
-| Data | MNIST via `zoo.data` (cached under `DATA_ROOT`) |
+| Data | MNIST or QMNIST (`--dataset` on `prepare` and `ae`) via `zoo.data` (cached under `DATA_ROOT`) |
 | Local run files | `<RUNS_ROOT>/digitdreamer/<run id>/` |
 | Extra dependencies | none |
 
 ```
-uv run projects/digitdreamer/cli.py prepare                          # download and cache MNIST
+uv run projects/digitdreamer/cli.py prepare                          # download and cache MNIST (`--dataset QMNIST` for QMNIST)
 uv run projects/digitdreamer/cli.py ae                               # stage 1
 uv run projects/digitdreamer/cli.py flow --ae-ckpt <AE best checkpoint>  # stage 2
 uv run projects/digitdreamer/cli.py sample <flow checkpoint>         # a grid of digits
