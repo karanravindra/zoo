@@ -1,7 +1,7 @@
 /**
  * Runs viewer: browse, watch and compare everything under <repo>/runs.
  *
- *   bun run projects/runs_viewer/server.ts [--port 3001]
+ *   bun run projects/archive/runs_viewer/server.ts [--port 3001]
  *
  * A run is any directory under runs/ holding config.json, metrics.csv or results.json,
  * at any depth. Runs are re-discovered on every request, so new runs and new metrics rows
@@ -12,7 +12,7 @@ import { dirname, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import index from "./index.html";
 
-const REPO = resolve(import.meta.dir, "../..");
+const REPO = resolve(import.meta.dir, "../../..");
 const RUNS = resolve(REPO, "runs");
 const RUN_FILES = ["config.json", "metrics.csv", "results.json"];
 const RUNNING_WITHIN_MS = 2 * 60 * 1000; // metrics.csv touched this recently -> still training

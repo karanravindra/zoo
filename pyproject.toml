@@ -12,6 +12,7 @@ dependencies = [
     "cut-cross-entropy",
     "datasets>=5.2.0",
     "dtour[cev]>=0.5.3",
+    "filelock>=4.2.10",
     "gigatoken>=0.11.0",
     "lightning>=2.6.6",
     "lpips>=0.1.4",

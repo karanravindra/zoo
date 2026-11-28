@@ -74,8 +74,8 @@ class Run:
         return float(hit[0]) if len(hit) else math.nan
 
 
-def load_runs(group: str, min_tokens: float = 0.0) -> list[Run]:
-    """The finished runs of a W&B group, with the validation rows from `min_tokens` tokens on."""
+def load_runs(group: str, min_tokens: float = 0.0, *, allow_unfinished: bool = False) -> list[Run]:
+    """Read validation rows from a W&B group, normally from finished runs only."""
     runs, unfinished = [], []
     for d in sorted(runs_root(PROJECT).iterdir()):
         cfg_file, csv_file = d / "config.json", d / "csv" / "metrics.csv"
@@ -87,7 +87,7 @@ def load_runs(group: str, min_tokens: float = 0.0) -> list[Run]:
         with csv_file.open() as f:
             rows = [r for r in csv.DictReader(f) if r.get("val/loss") not in (None, "")]
         steps = np.array([int(float(r["step"])) + 1 for r in rows])
-        if not len(steps) or steps[-1] < cfg.max_steps:  # still running, or crashed
+        if not len(steps) or (not allow_unfinished and steps[-1] < cfg.max_steps):
             unfinished.append(d.name)
             continue
         tokens = np.array([float(r["val/tokens_seen"]) if r.get("val/tokens_seen") else s * cfg.global_batch for r, s in zip(rows, steps)])
@@ -339,15 +339,30 @@ def run_fit_lr(args: LRFitConfig) -> None:
 
 # ---------------------------------------------------------------- fit-scaling
 
-def tuned_runs(runs: list[Run], rule_lr: float | None = None) -> list[Run]:
-    """One run per model size: seed 0, and of the learning rates run at that size the one with the lowest final loss (with `rule_lr`: only the runs of that base LR, the sweep's rule)."""
+def tuned_runs(runs: list[Run], rule_lr: float | None = None, *, cutoff: float | None = None) -> list[Run]:
+    """Select seed-zero runs by final loss, or by comparable validation losses through the cutoff."""
     by_size: dict[tuple[int, int], list[Run]] = {}
     for r in runs:
         if rule_lr is not None and not math.isclose(r.cfg.lr, rule_lr, rel_tol=1e-6):
             continue
         if r.cfg.seed == 0 and np.isfinite(r.loss).any():
             by_size.setdefault((r.cfg.dim, r.cfg.n_layers), []).append(r)
-    tuned = [min(rs, key=lambda r: r.loss[-1] if math.isfinite(r.loss[-1]) else math.inf) for rs in by_size.values()]
+    tuned = []
+    for rs in by_size.values():
+        if cutoff is None:
+            tuned.append(min(rs, key=lambda r: r.loss[-1] if math.isfinite(r.loss[-1]) else math.inf))
+            continue
+        # Compare candidates at the same token budget, using only rows available at the cutoff.
+        by_run = [
+            (r, {t: loss for t, loss in zip(r.tokens, r.loss) if t <= cutoff and math.isfinite(loss)})
+            for r in rs
+        ]
+        by_run = [(r, rows) for r, rows in by_run if rows]
+        if by_run:
+            common = set.intersection(*(set(rows) for _, rows in by_run))
+            if common:
+                budget = max(common)
+                tuned.append(min(by_run, key=lambda entry: (entry[1][budget], -entry[0].cfg.max_steps))[0])
     return sorted(tuned, key=lambda r: r.cfg.n_params)
 
 
@@ -582,7 +597,7 @@ def run_cuts(tuned_all: list[Run], which: str, rho: float, cuts: tuple[float, ..
     out["cut_sensitivity"] = rows
 
 
-def run_holdout(tuned: list[Run], which: str, holdout_tokens: float, out: dict) -> None:
+def run_holdout(tuned: list[Run], token_runs: list[Run], which: str, holdout_tokens: float, out: dict) -> None:
     """Predict the part of the data a fit has not seen: the two largest sizes (extrapolating in N), and the rows past `holdout_tokens`
     tokens of every run that goes beyond them (extrapolating in D). A mean error near zero and a worst case within ~0.01 mean the law
     can be trusted that far."""
@@ -602,8 +617,8 @@ def run_holdout(tuned: list[Run], which: str, holdout_tokens: float, out: dict) 
     def part(r: Run, keep: np.ndarray) -> Run:
         return Run(r.id, r.cfg, r.steps[keep], r.tokens[keep], r.flops[keep], r.loss[keep])
 
-    early = [part(r, r.tokens <= holdout_tokens) for r in tuned]
-    beyond = [r for r in tuned if (r.tokens > holdout_tokens).sum() >= 3]
+    early = [part(r, (r.tokens <= holdout_tokens) & np.isfinite(r.loss)) for r in token_runs]
+    beyond = [r for r in token_runs if ((r.tokens > holdout_tokens) & np.isfinite(r.loss)).sum() >= 3]
     if beyond and all(len(r.loss) >= 3 for r in early):
         p = eval_points(early, which)
         fit = fit_chinchilla(p["n"], p["d"], p["loss"])
@@ -649,7 +664,10 @@ def run_fit_scaling(args: ScalingConfig) -> None:
     rho2 = float(np.median([r.cfg.train_flops_per_token / (6 * r.n(other)) for r in tuned]))
     print(f"\nrobustness, N = {other} parameters instead: alpha {f2['alpha']:.3f}  beta {f2['beta']:.3f}  E {f2['E']:.3f}  rms {f2['rms']:.4f}  (FLOPs per token / 6N spans {min(r.cfg.train_flops_per_token / (6 * r.n(other)) for r in tuned):.2f}..{max(r.cfg.train_flops_per_token / (6 * r.n(other)) for r in tuned):.2f}, median {rho2:.2f})")
     out[f"fit_{other}_summary"] = f2
-    run_holdout(tuned, args.params, args.holdout_tokens, out)
+    candidates = load_runs(args.group, allow_unfinished=True)
+    token_runs = tuned_runs(candidates, args.rule_lr if args.lr == "rule" else None, cutoff=args.holdout_tokens)
+    token_runs = [x for r in token_runs if (x := r.trim(args.min_tokens)) is not None]
+    run_holdout(tuned, token_runs, args.params, args.holdout_tokens, out)
     save_results(d, out)
 
 

@@ -1,7 +1,7 @@
 /**
  * SAE feature viewer for lfm_sae: browse the latents of every SAE under runs/lfm_sae/train/.
  *
- *   bun run projects/lfm_sae/viewer/server.ts [--port 3002] [--runs runs/lfm_sae/train]
+ *   bun run projects/archive/lfm_sae/viewer/server.ts [--port 3002] [--runs runs/lfm_sae/train]
  *
  * An SAE shows up once features.py has written <run>/sae_<n>/features/features.json. Optional files next to it:
  * labels.json (labels and notes from reading the latents), notes.md, umap.json and neighbors.json (layout.py).
@@ -12,7 +12,7 @@ import { dirname, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import index from "./index.html";
 
-const REPO = resolve(import.meta.dir, "../../..");
+const REPO = resolve(import.meta.dir, "../../../..");
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),

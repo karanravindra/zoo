@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import glob
 import io
+import json
 from pathlib import Path
 
 from datasets import load_dataset
@@ -19,10 +19,29 @@ OOD = {
 }
 
 
+def distill_shards(data: str, *, target: str | None = None) -> list[str]:
+    """Read one committed build. Older distillation directories used a flat shard layout."""
+    root = Path(data)
+    pointer = root / "current"
+    if pointer.is_symlink():
+        root = pointer.resolve(strict=True)
+    manifest = root / "manifest.json"
+    if manifest.is_file():
+        build = json.loads(manifest.read_text())
+        if target is not None and (build["settings"]["target"] != target or build["settings"]["prompt"] != PROMPT):
+            raise ValueError(f"{root}: stored responses were generated with a different target or prompt")
+        files = [root / name for name in build["shards"]]
+    else:
+        files = sorted(root.glob("shard_*.parquet"))
+    if not files or not all(path.is_file() for path in files):
+        raise FileNotFoundError(f"missing distillation shards in {root}; run `cli.py prepare`")
+    return [str(path) for path in files]
+
+
 def load_pages(task: str, data: str, n_pages: int) -> tuple[list[Image.Image], str]:
     """(n_pages images, the prompt for the task). `val` = the first pages of the prepared shards, which training held out."""
     if task == "val":
-        files = sorted(glob.glob(str(Path(data) / "shard_*.parquet")))
+        files = distill_shards(data)
         ds = load_dataset("parquet", data_files=files, split="train")
         return [Image.open(io.BytesIO(ds[i]["image"])).convert("RGB") for i in range(n_pages)], PROMPT
     name, split, prompt = OOD[task]

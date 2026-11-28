@@ -27,9 +27,10 @@ import awkward as ak
 import gigatoken as gt
 import numpy as np
 from config import PrepareConfig
-from data import EOT, SPECIALS, corpus_dir
+from data import EOT, SPECIALS, corpus_dir, corpus_root
 from datasets import load_dataset
 
+from zoo.artifacts import publish_build, staged_build
 from zoo.data.text import write_token_corpus
 
 
@@ -186,6 +187,8 @@ def build_corpus(
             extra_meta=lambda text=text: {"num_docs": text.docs, "num_bytes": text.bytes, "eot_id": eot_id, "special_tokens": special_ids, "tokens_include_eot": True},
         )  # fmt: skip
         meta = json.loads((out / split / "meta.json").read_text())
+        if not meta["length"] or not text.bytes:
+            raise ValueError(f"{split}: corpus is empty")
         print(f"{split}: {text.docs:,} documents, {meta['length']:,} tokens in {len(meta['shards'])} shards, {text.bytes:,} bytes ({meta['length'] / max(1, text.bytes):.3f} tokens/byte)")
     shutil.rmtree(tmp)
     print(f"Wrote {out}")
@@ -193,18 +196,35 @@ def build_corpus(
 
 def prepare_corpus(cfg: PrepareConfig) -> None:
     source = SOURCES[cfg.dataset]
-    out = corpus_dir(cfg.dataset)
-    if (out / "tokenizer.json").exists() and not cfg.force:
-        print(f"{out} already built (use --force to rebuild)")
-        return
-    build_corpus(
-        documents(source, "train"),
-        documents(source, source.val_split) if source.val_split else None,
-        out,
-        vocab_size=cfg.vocab_size or source.vocab_size,
-        vocab_docs=cfg.vocab_docs,
-        val_docs=source.val_docs,
-        max_docs=cfg.max_docs,
-        shard_bytes=cfg.shard_mb << 20,
-        shard_tokens=cfg.shard_tokens,
-    )
+    root = corpus_root(cfg.dataset)
+
+    def complete(out: Path, split: str) -> bool:
+        try:
+            meta = json.loads((out / split / "meta.json").read_text())
+            files = [entry["file"] for entry in meta["shards"]] if "shards" in meta else ["tokens.npy"]
+            return meta["length"] > 0 and bool(files) and all((out / split / file).is_file() for file in files)
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+
+    if not cfg.force:
+        try:
+            out = corpus_dir(cfg.dataset)
+        except FileNotFoundError:
+            out = None
+        if out is not None and (out / "tokenizer.json").is_file() and all(complete(out, split) for split in ("train", "validation")):
+            print(f"{out} already built (use --force to rebuild)")
+            return
+
+    with staged_build(root) as stage:
+        build_corpus(
+            documents(source, "train"),
+            documents(source, source.val_split) if source.val_split else None,
+            stage,
+            vocab_size=cfg.vocab_size or source.vocab_size,
+            vocab_docs=cfg.vocab_docs,
+            val_docs=source.val_docs,
+            max_docs=cfg.max_docs,
+            shard_bytes=cfg.shard_mb << 20,
+            shard_tokens=cfg.shard_tokens,
+        )
+        publish_build(root, stage)

@@ -23,7 +23,7 @@ from typing import Annotated
 import torch
 import tyro
 from config import AnnealConfig, Config, EvalConfig, LRFitConfig, OptimConfig, PrepareConfig, PrepareEvalsConfig, SampleConfig, ScalingConfig, ShapeConfig
-from data import GPTData, load_meta, load_tokenizer
+from data import GPTData, checkpoint_corpus, corpus_dir, corpus_root, load_meta, load_tokenizer
 from prepare import prepare_corpus
 from pretrain import LitGPT
 from torchinfo import summary
@@ -36,7 +36,10 @@ PROJECT = "gpt"
 
 def pretrain(cfg: Config) -> None:
     seed_everything(cfg.seed, deterministic=cfg.deterministic)
-    train_meta, val_meta = load_meta(cfg.dataset, "train"), load_meta(cfg.dataset, "validation")
+    root = corpus_dir(cfg.dataset)
+    cfg.corpus_build = str(root.resolve().relative_to(corpus_root(cfg.dataset).resolve()))
+    train_meta = load_meta(cfg.dataset, "train", root=root)
+    val_meta = load_meta(cfg.dataset, "validation", root=root)
     # The corpus decides the vocabulary, so the config that is logged and saved in checkpoints is the one that ran.
     cfg.vocab_size, cfg.eot_id = train_meta["vocab_size"], train_meta["eot_id"]
     cfg.tokens_per_byte = val_meta["length"] / val_meta["num_bytes"]
@@ -54,7 +57,7 @@ def pretrain(cfg: Config) -> None:
         accumulate_grad_batches=cfg.grad_accum,
         devices=cfg.devices, strategy="ddp" if cfg.devices > 1 else "auto",
     )  # fmt: skip
-    trainer.fit(module, GPTData(cfg))
+    trainer.fit(module, GPTData(cfg, root))
     # The corpus has no test split: the validation windows chose the checkpoint and are the final score.
 
 
@@ -62,7 +65,8 @@ def sample(cfg: SampleConfig) -> None:
     seed_everything(cfg.seed)
     device = get_device()
     module = load_module(LitGPT, cfg.ckpt, map_location=device).to(device)
-    tok, model_cfg = load_tokenizer(module.cfg.dataset), module.cfg
+    model_cfg = module.cfg
+    tok = load_tokenizer(model_cfg.dataset, root=checkpoint_corpus(model_cfg))
     ids = [int(t) for t in tok.encode(cfg.prompt)] if cfg.prompt else [model_cfg.eot_id]
     prompt = torch.tensor([ids] * cfg.num_samples, device=device)
     g = torch.Generator(device=device).manual_seed(cfg.seed)

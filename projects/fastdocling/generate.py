@@ -31,22 +31,26 @@ def main(cfg: dict) -> None:
     llm = LLM(model=cfg["target"], gpu_memory_utilization=cfg["gpu_memory_utilization"], limit_mm_per_prompt={"image": 1},
               max_model_len=cfg["max_new_tokens"] + 4096)
     sampling = SamplingParams(temperature=0.0, max_tokens=cfg["max_new_tokens"])
+    shards = []
     stream = load_dataset(cfg["dataset"], split=cfg["split"], streaming=True)
-    chunk, shard, done = [], 0, 0
+    chunk, done = [], 0
 
     def flush():
-        nonlocal chunk, shard, done
+        nonlocal chunk, done
         if not chunk:
             return
         outs = llm.generate([{"prompt": prompt, "multi_modal_data": {"image": im}} for im in chunk], sampling)
+        if len(outs) != len(chunk):
+            raise RuntimeError(f"expected {len(chunk)} generated pages, got {len(outs)}")
         rows = []
         for im, o in zip(chunk, outs):
             buf = io.BytesIO()
             im.save(buf, format="PNG")
             rows.append({"image": buf.getvalue(), "tokens": list(o.outputs[0].token_ids), "finish": o.outputs[0].finish_reason})
-        pq.write_table(pa.Table.from_pylist(rows), out / f"shard_{shard:04d}.parquet")
+        name = f"shard_{len(shards):04d}.parquet"
+        pq.write_table(pa.Table.from_pylist(rows), out / name)
+        shards.append(name)
         done += len(rows)
-        shard += 1
         chunk = []
         print(f"{done}/{cfg['n_pages']} pages", flush=True)
 
@@ -57,6 +61,12 @@ def main(cfg: dict) -> None:
         if done >= cfg["n_pages"]:
             break
     flush()
+    if not done:
+        raise ValueError("the input dataset produced no pages")
+    settings = {key: value for key, value in cfg.items() if key != "out"}
+    (out / "manifest.json").write_text(json.dumps({
+        "settings": settings, "num_pages": done, "shards": shards,
+    }, indent=2))
 
 
 if __name__ == "__main__":

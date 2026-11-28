@@ -20,7 +20,9 @@ import tyro
 from config import PROMPT, BenchConfig, PrepareConfig, TrainConfig, VllmBenchConfig
 from data import DistillData
 from module import LitDrafter
+from pages import distill_shards
 
+from zoo.artifacts import current_build, publish_build, staged_build
 from zoo.training import make_trainer
 from zoo.utils.device import seed_everything
 
@@ -30,8 +32,13 @@ PROJECT = "fastdocling"
 def prepare(cfg: PrepareConfig) -> None:
     # vLLM pins an older torch than the project, so generation runs in its own uv env (the script's inline dependencies).
     worker = Path(__file__).with_name("generate.py")
-    args = json.dumps(asdict(cfg) | {"prompt": PROMPT}, default=str)
-    subprocess.run(["uv", "run", str(worker), args], check=True)
+    if cfg.n_pages < 1:
+        raise ValueError("n_pages must be positive")
+    with staged_build(cfg.out) as stage:
+        args = json.dumps(asdict(cfg) | {"out": stage, "prompt": PROMPT}, default=str)
+        subprocess.run(["uv", "run", str(worker), args], check=True)
+        distill_shards(str(stage), target=cfg.target)
+        publish_build(cfg.out, stage)
     print(f"Wrote {cfg.out}")
 
 
@@ -55,9 +62,10 @@ def vllm_bench(cfg: VllmBenchConfig) -> None:
     # Like `prepare`: vLLM runs in its own uv env, one engine per setting, and the per-setting results are merged here.
     worker = Path(__file__).with_name("vllm_bench.py")
     records = []
+    data = current_build(Path(cfg.data))
     for spec in cfg.specs:
         part = cfg.out.with_name(f"vllm_bench_{spec}.json")
-        args = json.dumps(asdict(cfg) | {"spec": spec, "out": str(part)}, default=str)
+        args = json.dumps(asdict(cfg) | {"spec": spec, "out": str(part), "data": data}, default=str)
         cfg.out.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["uv", "run", str(worker), args], check=True)
         records += json.loads(part.read_text())

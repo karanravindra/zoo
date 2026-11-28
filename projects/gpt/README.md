@@ -8,7 +8,7 @@ starting from the previous stage's checkpoint.
 | | |
 | --- | --- |
 | W&B project | `gpt`, group `pretrain` (later `sft`, `dpo`, `grpo`) |
-| Data | `<DATA_ROOT>/gpt/<dataset>/`: `tokenizer.json` and `train/`, `validation/` token shards |
+| Data | `<DATA_ROOT>/gpt/<dataset>/current/`: `tokenizer.json` and `train/`, `validation/` token shards |
 | Local run files | `<RUNS_ROOT>/gpt/<run id>/` |
 | Extra dependencies | none |
 
@@ -38,7 +38,7 @@ dominated by the initial weights.
 | `fit-shape` | Scaling study, shape: at equal compute, the loss against depth x width (a fitted surface, the best aspect ratio at each size), MLP size, head size and context length, with seed noise. |
 | `fit-optim` | Scaling study, optimizer settings: at equal compute, weight decay, AdamW beta2, warmup, tokens per step (with its learning rate), gradient clipping and a document mask of one size against the shape grid's run of that size. |
 | `prepare-evals` | Downloads the evaluation sets that are not in the HF cache (WikiText, PG-19, MMLU, ...) and saves the validation documents' URL and edu score (`validation/docs.json`) for the per-slice losses. |
-| `eval` | Scores checkpoints (run directories: their `last.ckpt`, EMA weights) on the evaluation suite below, offline; writes `eval.json` to the run directory and `eval/<task>/<metric>` to the run's W&B summary. |
+| `eval` | Scores checkpoints (run directories: their `last.ckpt`, EMA weights) on the evaluation suite below, offline; writes keyed reports in `eval/` and `eval/<key>/<task>/<metric>` to the run's W&B summary. |
 
 Logged metrics: `train/loss`, `train/tokens_seen` and `train/flops` (cumulative over all devices; `flops` counts
 matmul FLOPs at the full context, see `Config.train_flops_per_token`), `val/loss`, `val/bpb` (bits per UTF-8 byte,
@@ -61,6 +61,9 @@ Files:
 Notes:
 - **Shards.** Text goes to temporary shards of `--shard-mb` MB and tokens to `--shard-tokens` tokens per `.npy`
   shard, so RAM stays bounded whatever the corpus size. `zoo.data.text.Shards` reads them as one array.
+- **Rebuilds.** `prepare` stages a new version in `.builds/` and switches `current` after the tokenizer and both splits are ready.
+  Checkpoints record the version they trained on. Keep old builds while any checkpoint or active reader still uses them.
+  Legacy flat directories remain readable.
 - **Tokenizer.** gigatoken trains the BPE and encodes (in Rust, in parallel). Ids 256, 257, 258 are `<|endoftext|>`, `<|im_start|>`
   and `<|im_end|>`; the chat markers are unused in pretraining and reserved so SFT can use them without a new vocabulary.
 - **Loss.** Apple's cut cross-entropy (`--loss auto`: CUDA with bf16) computes the loss from hidden states and the tied
@@ -76,23 +79,27 @@ Notes:
 ## Evaluation
 
 `prepare-evals` fetches what the HF cache lacks (WikiText, PG-19 and MMLU; the other sets were already cached) and, for FineWeb-Edu, saves the
-validation documents' URL and edu score to `<corpus>/validation/docs.json` (the shards hold only tokens; the file is checked against the document
-and byte counts `prepare` recorded). `eval <run dir or checkpoint>...` then scores the EMA weights with no network: it prints a line per task, writes
-`<run dir>/eval.json` (the tasks of earlier calls are kept, so the suite can be filled in a task at a time) and adds `eval/<task>/<metric>` to the run's W&B summary
-(`--no-wandb` to skip; the W&B id is read from the run's `wandb/` folder, since a sweep agent chooses its own). Without `--tasks` it runs everything, or `val` and
-`blimp` for a TinyStories model, whose knowledge sets mean nothing. `--limit N` and `--limit-tokens N` make a quick check.
+validation documents' URL and edu score to the active build's `validation/docs.json`. For cache-only scoring, set
+`HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1`. Use `--no-wandb` to skip publishing results.
+
+Each completed task is saved to `<run dir>/eval/<key>.json`, keyed by the checkpoint SHA-256 and evaluation settings.
+Calls with matching keys can fill in tasks over time. Full evaluations also update `<run dir>/eval.json` with the latest
+full report. Quick checks using `--limit` or `--limit-tokens` have their own reports. W&B metrics use
+`eval/<key>/<task>/<metric>` and the run ID from the run's W&B directory when available. By default `eval` runs every task
+for FineWeb-Edu and `val` plus BLiMP for TinyStories.
 
 | Task | Measures | Reports |
 | --- | --- | --- |
 | `val` | the corpus's own validation split, all of it (not the 2M-token subset of training), by position in the window and by document length; FineWeb-Edu also by URL domain and edu score | `loss`, `bpb`, token `acc`; `loss_2m` is the training `val/loss` windows |
 | `wikitext` | WikiText-2/103 test (the same text), detokenized as GPT-2 does | the same, and `word_ppl` |
 | `pg19` | the middle `--pg19-chars` (40,000) characters of each of the 100 PG-19 test books: book-length text | the same |
-| `blimp` | grammar: is the good sentence more likely than the bad one? 67 paradigms of 1,000 pairs | `acc`, overall, per `linguistics_term` (13) and per paradigm (`eval.json` only) |
+| `blimp` | grammar: is the good sentence more likely than the bad one? 67 paradigms of 1,000 pairs | `acc`, overall, per `linguistics_term` (13) and per paradigm (local report only) |
 | `arc_easy`, `arc_challenge`, `hellaswag`, `piqa`, `sciq`, `mmlu` | zero-shot multiple choice (MMLU as cloze: the answer's text, not its letter) | `acc`, `acc_norm`, `bpb` of the correct answer, `chance` |
 | `lambada` | the last word of a passage | `acc` (greedy decoding gets the whole word), `ppl` of the word |
 
 - **Conventions.** Every prompt starts behind an end-of-text token, as a document does in training; the prompts and answers are the lm-evaluation-harness ones
-  (`Question: ...\nAnswer:`, HellaSwag's cleaned context). `acc` takes the answer with the highest total log-probability, `acc_norm` the highest per byte of answer.
+  (`Question: ...\nAnswer:`, HellaSwag's cleaned context). Long continuations use a rolling window with up to `block_size`
+  preceding tokens per target. `acc` takes the answer with the highest total log-probability, `acc_norm` the highest per byte of answer.
   The `bpb` of the correct answer is smooth while the accuracy is still at chance, which is what a scaling-law fit needs. Loss sets are scored as in training, in windows of `block_size`
   tokens (a model never sees more context than it was trained with), and their `bpb` is the training `val/bpb` formula.
 - **Noise.** Every accuracy has its binomial standard error (`acc_se`): about 1.4% on a 1,000-item set, 0.5% on HellaSwag, 0.2% on BLiMP. A difference under two standard errors is not a result.
@@ -107,6 +114,8 @@ and byte counts `prepare` recorded). `eval <run dir or checkpoint>...` then scor
 A study of how the validation loss depends on model size `N` and training tokens `D`, first on TinyStories (cheap, and the place
 to debug the method), then on FineWeb-Edu (where the law is meant to live: TinyStories is one pass over 486M tokens, so its IsoFLOP
 profiles are data-limited and the parametric fit is the main tool there).
+
+For the token holdout, learning-rate selection uses the validation rows through the cutoff.
 
 The method rests on a constant LR and an EMA whose window is a share of the steps so far (see above): the first k steps of a run do
 not depend on how long it was planned to be, so every validation row (`val/loss` against `val/flops`) is the result of a shorter run
